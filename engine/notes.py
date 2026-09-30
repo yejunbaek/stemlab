@@ -18,7 +18,7 @@ RANGES = {  # (lowest, highest) Hz to search per part
     "piano": (27.5, 2100.0),
     "other": (50.0, 1600.0),
 }
-SR = 22050
+SR = 11025
 HOP = 256
 
 
@@ -31,9 +31,9 @@ def detect(path, stem, progress_cb):
     starts = list(range(0, max(1, len(y)), chunk))
     for i, s in enumerate(starts):
         seg = y[s: s + chunk]
-        if len(seg) < 4096:
-            seg = np.pad(seg, (0, 4096 - len(seg)))
-        f0, voiced, _ = librosa.pyin(seg, fmin=fmin, fmax=fmax, sr=SR, frame_length=2048,
+        if len(seg) < 2048:
+            seg = np.pad(seg, (0, 2048 - len(seg)))
+        f0, voiced, _ = librosa.pyin(seg, fmin=fmin, fmax=fmax, sr=SR, frame_length=1024,
                                      hop_length=HOP, center=True)
         n_frames = int(np.ceil(min(chunk, len(y) - s) / HOP))
         f0_parts.append(f0[:n_frames])
@@ -41,7 +41,7 @@ def detect(path, stem, progress_cb):
         progress_cb(0.9 * (i + 1) / len(starts), "Listening for notes")
     f0 = np.concatenate(f0_parts)
     voiced = np.concatenate(voiced_parts)
-    rms = librosa.feature.rms(y=y, frame_length=2048, hop_length=HOP)[0][: len(f0)]
+    rms = librosa.feature.rms(y=y, frame_length=1024, hop_length=HOP)[0][: len(f0)]
     if len(rms) < len(f0):
         rms = np.pad(rms, (0, len(f0) - len(rms)))
     loud = rms > 0.08 * (np.percentile(rms, 98) + 1e-9)

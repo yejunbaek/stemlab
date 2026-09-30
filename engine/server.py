@@ -1,5 +1,6 @@
 """Local HTTP engine for Stemlab. Started by the desktop app; listens on 127.0.0.1 only."""
 import argparse
+import base64
 import json
 import os
 import shutil
@@ -14,6 +15,8 @@ from flask import Flask, abort, jsonify, request, send_file
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import notes as notes_mod  # noqa: E402
 import synth as synth_mod  # noqa: E402
+import chords as chords_mod  # noqa: E402
+import lyrics as lyrics_mod  # noqa: E402
 import processing  # noqa: E402
 import sources  # noqa: E402
 
@@ -104,6 +107,9 @@ def check_token():
 @app.after_request
 def no_cache(resp):
     resp.headers["Cache-Control"] = "no-store"
+    # the app's page loads audio from here; allow it (every request still needs the token)
+    if "/audio/" in request.path or "/peaks/" in request.path:
+        resp.headers["Access-Control-Allow-Origin"] = "*"
     return resp
 
 
@@ -125,7 +131,9 @@ def list_projects():
             try:
                 with open(f, encoding="utf-8") as fh:
                     p = json.load(fh)
-                out.append({k: p.get(k) for k in ("id", "title", "artist", "status", "created", "error")})
+                item = {k: p.get(k) for k in ("id", "title", "artist", "status", "created", "error", "stems")}
+                item["synths"] = [{"id": k, "name": v.get("name")} for k, v in (p.get("synths") or {}).items()]
+                out.append(item)
             except Exception:
                 pass
     out.sort(key=lambda p: p.get("created") or 0, reverse=True)
@@ -175,6 +183,7 @@ def create_project():
             progress(0.9, "Finding tempo and key")
             p["analysis"] = processing.analyze(d, stems)
             set_status(p, "ready")
+            queue_extras(pid)
             return {"project": pid}
         except Exception as e:
             set_status(p, "error", str(e))
@@ -201,6 +210,7 @@ def retry(pid):
             progress(0.9, "Finding tempo and key")
             p["analysis"] = processing.analyze(d, p["stems"])
             set_status(p, "ready")
+            queue_extras(pid)
             return {"project": pid}
         except Exception as e:
             set_status(p, "error", str(e))
@@ -272,8 +282,7 @@ def job_status(jid):
     return jsonify(job)
 
 
-@app.get("/projects/<pid>/audio/<version>/<name>")
-def audio(pid, version, name):
+def audio_path(pid, version, name):
     d = pdir(pid)
     if version == "original":
         path = os.path.join(d, "original.wav")
@@ -286,7 +295,47 @@ def audio(pid, version, name):
         abort(404)
     if not os.path.isfile(path):
         abort(404)
-    return send_file(path, mimetype="audio/wav", conditional=True)
+    return path
+
+
+@app.get("/projects/<pid>/audio/<version>/<name>")
+def audio(pid, version, name):
+    return send_file(audio_path(pid, version, name), mimetype="audio/wav", conditional=True)
+
+
+PEAK_RATE = 100
+
+
+@app.get("/projects/<pid>/peaks/<version>/<name>")
+def peaks(pid, version, name):
+    """Loudness outline of a part (100 values per second) for drawing, so the app never has to
+    load whole songs into memory."""
+    import numpy as np
+    import soundfile as sf
+    path = audio_path(pid, version, name)
+    cache = path + ".peaks"
+    if not (os.path.isfile(cache) and os.path.getmtime(cache) >= os.path.getmtime(path)):
+        vals = []
+        with sf.SoundFile(path) as f:
+            per = f.samplerate // PEAK_RATE
+            while True:
+                block = f.read(per * 2000, dtype="float32", always_2d=True)
+                if not len(block):
+                    break
+                mono = np.abs(block.mean(axis=1))
+                n = len(mono) // per
+                if n:
+                    vals.append(mono[: n * per].reshape(n, per).max(axis=1))
+                if len(mono) % per:
+                    vals.append(np.array([mono[n * per:].max()]))
+        v = np.concatenate(vals) if vals else np.zeros(1)
+        q = np.clip(np.round(np.sqrt(np.clip(v, 0, 1)) * 255), 0, 255).astype(np.uint8)
+        with open(cache + ".tmp", "wb") as fh:
+            fh.write(q.tobytes())
+        os.replace(cache + ".tmp", cache)
+    with open(cache, "rb") as fh:
+        data = fh.read()
+    return jsonify(rate=PEAK_RATE, scale="sqrt", data=base64.b64encode(data).decode("ascii"))
 
 
 # --------------------------------------------------------------------------- notes
@@ -469,6 +518,240 @@ def delete_synth(pid, sid):
     return jsonify(ok=True)
 
 
+# --------------------------------------------------------------------------- background extras
+# After a song is split, find the notes in every part, the chords, and the lyrics, one task at a
+# time, so they're ready when the person opens the Notes screen.
+
+EXTRA_Q = []                 # [(pid, task)] task: "notes:<stem>" | "chords" | "lyrics"
+EXTRA_CV = threading.Condition()
+EXTRA_NOW = {}               # pid -> {"task", "progress", "stage"}
+
+
+def _extras_needed(p):
+    tasks = []
+    ex = p.get("extras") or {}
+    for stem in p.get("stems", []):
+        if stem == "drums":
+            continue
+        if not (p.get("note_edits") or {}).get(stem) and not str((ex.get("notes") or {}).get(stem, "")).startswith("error"):
+            tasks.append(f"notes:{stem}")
+    sheet = p.get("sheet") or {}
+    if not sheet.get("chords") and not str(ex.get("chords", "")).startswith("error"):
+        tasks.append("chords")
+    if "vocals" in p.get("stems", []) and sheet.get("lyrics") is None and not str(ex.get("lyrics", "")).startswith("error"):
+        tasks.append("lyrics")
+    return tasks
+
+
+def _set_extra(pid, task, status):
+    with NOTE_LOCKS.setdefault(pid, threading.Lock()):
+        try:
+            q = load_project(pid)
+        except Exception:
+            return
+        ex = q.setdefault("extras", {})
+        if task.startswith("notes:"):
+            ex.setdefault("notes", {})[task[6:]] = status
+        else:
+            ex[task] = status
+        save_project(q)
+
+
+def queue_extras(pid, front=None):
+    try:
+        p = load_project(pid)
+    except Exception:
+        return
+    if p.get("status") != "ready":
+        return
+    with EXTRA_CV:
+        for t in _extras_needed(p):
+            if (pid, t) not in EXTRA_Q and EXTRA_NOW.get(pid, {}).get("task") != t:
+                EXTRA_Q.append((pid, t))
+                _set_extra(pid, t, "queued")
+        if front:
+            items = [x for x in EXTRA_Q if x[0] == pid and x[1] == front]
+            for x in items:
+                EXTRA_Q.remove(x)
+                EXTRA_Q.insert(0, x)
+        EXTRA_CV.notify()
+
+
+def _run_extra(pid, task):
+    d = pdir(pid)
+    p = load_project(pid)
+    now = EXTRA_NOW[pid] = {"task": task, "progress": 0.0, "stage": "Starting"}
+
+    def progress(f, stage=None):
+        now["progress"] = round(max(0.0, min(1.0, f)), 3)
+        if stage:
+            now["stage"] = stage
+
+    if task.startswith("notes:"):
+        stem = task[6:]
+        found = notes_mod.detect(os.path.join(d, "stems", stem + ".wav"), stem, progress)
+        with NOTE_LOCKS.setdefault(pid, threading.Lock()):
+            q = load_project(pid)
+            if not (q.get("note_edits") or {}).get(stem):
+                q.setdefault("note_edits", {})[stem] = {"base": "stems", "detected": found, "notes": found, "active": False}
+                save_project(q)
+    elif task == "chords":
+        import librosa
+        import numpy as np
+        sr = 22050
+        loads = {}
+        for s in p["stems"]:
+            if s != "drums":
+                loads[s], _ = librosa.load(os.path.join(d, "stems", s + ".wav"), sr=sr, mono=True)
+        beats = (p.get("analysis") or {}).get("beats") or []
+        key = (p.get("analysis") or {}).get("key")
+        harm = [loads[s] for s in loads if s not in ("vocals",)] or list(loads.values())
+        n = min(len(x) for x in harm)
+        mix = sum(x[:n] for x in harm)
+        progress(0.1, "Finding the chords")
+        song, _ = chords_mod.detect(mix, sr, beats, key)
+        result = {"song": song}
+        source = {}
+        loud = max(float(np.sqrt(np.mean(x ** 2))) for x in loads.values()) + 1e-9
+        for i, (s, y) in enumerate(loads.items()):
+            progress(0.2 + 0.8 * i / max(1, len(loads)), f"Finding the chords for {s}")
+            active = float(np.sqrt(np.mean(y ** 2))) > 0.15 * loud
+            if s in ("vocals", "bass") or not active:
+                source[s] = "song"
+                continue
+            own, conf = chords_mod.detect(y, sr, beats, key)
+            same = _agreement(own, song)
+            if conf >= 0.82 and same < 0.85:
+                result[s] = own
+                source[s] = "own"
+            else:
+                source[s] = "song"
+        with NOTE_LOCKS.setdefault(pid, threading.Lock()):
+            q = load_project(pid)
+            sheet = q.setdefault("sheet", {})
+            sheet["chords"] = result
+            sheet["chord_source"] = source
+            save_project(q)
+    elif task == "lyrics":
+        res = lyrics_mod.transcribe(os.path.join(d, "stems", "vocals.wav"),
+                                    os.path.join(CFG["data"], "models", "whisper"), progress)
+        with NOTE_LOCKS.setdefault(pid, threading.Lock()):
+            q = load_project(pid)
+            q.setdefault("sheet", {})["lyrics"] = res
+            save_project(q)
+
+
+def _agreement(a, b):
+    """Share of time two chord timelines agree."""
+    if not a or not b:
+        return 0.0
+    end = max(a[-1]["end"], b[-1]["end"])
+    ts = [i * 0.25 for i in range(int(end / 0.25))]
+    def at(segs, t):
+        for s in segs:
+            if s["start"] <= t < s["end"]:
+                return s["chord"]
+        return "N"
+    same = sum(1 for t in ts if at(a, t) == at(b, t))
+    return same / max(1, len(ts))
+
+
+def _extras_worker():
+    while True:
+        with EXTRA_CV:
+            while not EXTRA_Q:
+                EXTRA_CV.wait()
+            pid, task = EXTRA_Q.pop(0)
+        try:
+            _set_extra(pid, task, "running")
+            _run_extra(pid, task)
+            _set_extra(pid, task, "done")
+        except Exception as e:  # keep going with the other tasks
+            traceback.print_exc()
+            _set_extra(pid, task, "error: " + (str(e) or e.__class__.__name__)[:300])
+        finally:
+            EXTRA_NOW.pop(pid, None)
+
+
+@app.get("/projects/<pid>/extras")
+def extras_status(pid):
+    p = load_project(pid)
+    with EXTRA_CV:
+        queued = [t for (q, t) in EXTRA_Q if q == pid]
+    return jsonify(status=p.get("extras") or {}, now=EXTRA_NOW.get(pid), queued=queued)
+
+
+@app.post("/projects/<pid>/extras")
+def extras_request(pid):
+    """Queue anything missing; 'first' moves one task to the front; 'retry' clears an error."""
+    body = request.get_json(silent=True) or {}
+    retry = body.get("retry")
+    if retry:
+        with NOTE_LOCKS.setdefault(pid, threading.Lock()):
+            p = load_project(pid)
+            ex = p.setdefault("extras", {})
+            if retry.startswith("notes:"):
+                (ex.get("notes") or {}).pop(retry[6:], None)
+            else:
+                ex.pop(retry, None)
+                if retry == "lyrics":
+                    (p.get("sheet") or {}).pop("lyrics", None)
+                if retry == "chords":
+                    (p.get("sheet") or {}).pop("chords", None)
+            save_project(p)
+    queue_extras(pid, front=body.get("first") or retry)
+    return extras_status(pid)
+
+
+# --------------------------------------------------------------------------- chord sheet edits
+
+@app.put("/projects/<pid>/sheet")
+def save_sheet(pid):
+    body = request.get_json(force=True) or {}
+    with NOTE_LOCKS.setdefault(pid, threading.Lock()):
+        p = load_project(pid)
+        sheet = p.setdefault("sheet", {})
+        if "line" in body:                      # one lyric line's text changed
+            ln = body["line"]
+            lines = (sheet.get("lyrics") or {}).get("lines") or []
+            for i, old in enumerate(lines):
+                if old["id"] == ln.get("id"):
+                    lines[i] = lyrics_mod.retime_line(old, str(ln.get("text", ""))[:500])
+            sheet["lyrics"]["edited"] = True
+        if "add_line" in body:                   # a new lyric line at a time
+            t = float(body["add_line"].get("time", 0))
+            lyr = sheet.setdefault("lyrics", {"lines": []})
+            lyr.setdefault("lines", [])
+            new = lyrics_mod.retime_line({"id": "u" + uuid.uuid4().hex[:6], "start": t, "end": t + 3.0, "words": []},
+                                         str(body["add_line"].get("text", ""))[:500])
+            lyr["lines"].append(new)
+            lyr["lines"].sort(key=lambda l: l["start"])
+            lyr["edited"] = True
+        if "delete_line" in body:
+            lyr = sheet.get("lyrics") or {}
+            lyr["lines"] = [l for l in lyr.get("lines", []) if l["id"] != body["delete_line"]]
+        if "chords" in body:                     # a part's chord list (or the shared "song" list)
+            key = body.get("part") or "song"
+            clean = []
+            for c in body["chords"]:
+                try:
+                    clean.append({"id": str(c.get("id") or uuid.uuid4().hex[:6])[:12],
+                                  "start": round(float(c["start"]), 3), "end": round(float(c["end"]), 3),
+                                  "chord": str(c["chord"])[:12]})
+                except (KeyError, TypeError, ValueError):
+                    continue
+            clean.sort(key=lambda c: c["start"])
+            sheet.setdefault("chords", {})[key] = clean
+            if key != "song":
+                sheet.setdefault("chord_source", {})[key] = "own"
+        if body.get("use_song_chords"):
+            part = body["use_song_chords"]
+            (sheet.get("chords") or {}).pop(part, None)
+            sheet.setdefault("chord_source", {})[part] = "song"
+        save_project(p)
+        return jsonify(sheet)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, required=True)
@@ -490,6 +773,10 @@ def main():
                 save_project(p)
         except Exception:
             pass
+    threading.Thread(target=_extras_worker, daemon=True).start()
+    for pid in sorted(os.listdir(projects_dir()), reverse=True):
+        if os.path.isfile(os.path.join(projects_dir(), pid, "project.json")):
+            queue_extras(pid)
     log(f"STEMLAB_READY {a.port}")
     app.run(host="127.0.0.1", port=a.port, threaded=True, use_reloader=False)
 

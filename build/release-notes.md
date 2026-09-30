@@ -1,3 +1,7 @@
-- Stemlab now updates itself. When a new version is out you'll see a bar at the top with Update now, and you can check any time from the bottom of the sidebar.
-- Notes screen: switch a song to Notes to see every track as note blocks along the top, with the piano roll for the selected track below.
-- Synth parts: add a synth, draw notes or copy a melody from another part, and pick from six sounds.
+- Long songs no longer lag or go silent. Parts now stream as they play instead of loading all at once, so a 10-minute song opens as fast as a short one.
+- Notes are found automatically in the background after a song is split, so the piano roll is ready when you open Notes.
+- New Chords & lyrics view in the Notes screen: chords placed over the words they change on, for each part. Click a chord to change it, drag it onto another word to move it, and double-click a line to fix the lyrics.
+- The sidebar lists each song's parts. Click a part to see and hear it by itself.
+- Rename songs by double-clicking them in the sidebar or clicking the title.
+- Songs added from YouTube or Spotify now keep their real names.
+- The first time lyrics are written out, Stemlab downloads a speech model (about 500 MB).

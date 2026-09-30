@@ -25,35 +25,115 @@ async function openNotes(stem) {
     ne = {
       kind: 'synth', stem, base: state.version, detected: [], notes: clone(sy.notes), has: true,
       sel: new Set(), undo: [], pps: +$('#zoomSlider').value, rowH: 14, lo: 36, hi: 84, drag: null,
-      saving: false, again: false, srcBuf: null, timer: null, hear: hear || 'all',
+      saving: false, again: false, timer: null, hear: hear || 'all',
     };
     enterNoteView();
-    await showRoll();
+    if (state.noteMode === 'sheet') showSheet(); else await showRoll();
     return;
   }
-  if (stem === 'drums') { toast("Drums don't have notes to edit. Pick another track."); return; }
   let data = null;
-  try { data = await api(`/projects/${p.id}/notes/${stem}`); } catch (e) { toast(e.message); return; }
-  if (data && data.base !== state.version) {
-    // notes were found in the other version; play that one so what you hear matches
+  if (stem !== 'drums') {
+    try { data = await api(`/projects/${p.id}/notes/${stem}`); } catch (e) { toast(e.message); return; }
+  }
+  if (data && data.base !== state.version && state.noteMode !== 'sheet') {
+    // notes belong to the other version; play that one so what you hear matches
     state.version = data.base;
     await loadVersion();
   }
   ne = {
-    kind: 'part', hear: hear || 'solo', stem, base: data ? data.base : state.version,
+    kind: stem === 'drums' ? 'drums' : 'part', hear: hear || 'solo', stem, base: data ? data.base : 'stems',
     detected: data ? data.detected : [], notes: data ? clone(data.notes) : [],
     has: !!data, sel: new Set(), undo: [], pps: +$('#zoomSlider').value, rowH: 14,
-    lo: 36, hi: 84, drag: null, saving: false, again: false, srcBuf: null, timer: null,
+    lo: 36, hi: 84, drag: null, saving: false, again: false, timer: null,
   };
   enterNoteView();
-  if (!ne.has) showDetect();
-  else await showRoll();
+  if (state.noteMode === 'sheet') { showSheet(); return; }
+  if (!ne.has) { showWaiting(); return; }
+  await showRoll();
+}
+
+// notes are found in the background after splitting; show where that's at
+function showWaiting() {
+  $('#rollWrap').hidden = true;
+  $('#noteHelp').hidden = true;
+  $('#sheetView').hidden = true;
+  $('#noteDetect').hidden = false;
+  $$('.note-bar #undoBtn, .note-bar #resetNotesBtn, .note-bar #redetectBtn, .note-bar .zoom, .note-bar .inline')
+    .forEach((el) => { el.hidden = true; });
+  $('#noteStatus').textContent = '';
+  const btn = $('#detectBtn');
+  if (ne.kind === 'drums') {
+    $('#detectText').textContent = "Drums don't play notes, so there's nothing to show in the piano roll. Switch to Chords & lyrics, or pick another track above.";
+    btn.hidden = true; $('#detectProgress').hidden = true;
+    return;
+  }
+  const task = `notes:${ne.stem}`;
+  const ex = state.extras || {};
+  const st = ((ex.status || {}).notes || {})[ne.stem] || '';
+  const running = ex.now && ex.now.task === task;
+  const queuedAt = (ex.queued || []).indexOf(task);
+  $('#detectProgress').hidden = !running;
+  if (running) {
+    $('#detectText').textContent = `Finding the notes in the ${stemLabel(ne.stem).toLowerCase()} part…`;
+    $('#detectBar').style.width = `${Math.round((ex.now.progress || 0) * 100)}%`;
+    $('#detectStage').textContent = `${Math.round((ex.now.progress || 0) * 100)}%`;
+    btn.hidden = true;
+  } else if (st.startsWith('error')) {
+    $('#detectText').textContent = `Couldn't find the notes in this part. ${st.replace(/^error:\s*/, '')}`;
+    btn.hidden = false; btn.textContent = 'Try again';
+  } else {
+    $('#detectText').textContent = queuedAt > 0
+      ? `Stemlab is finding the notes in each part. ${stemLabel(ne.stem)} is next up after ${queuedAt} other ${queuedAt === 1 ? 'task' : 'tasks'}.`
+      : `Stemlab is about to find the notes in the ${stemLabel(ne.stem).toLowerCase()} part.`;
+    btn.hidden = true;
+    if (queuedAt !== 0 && !running) api(`/projects/${state.current.id}/extras`, { method: 'POST', body: { first: task } })
+      .then((r) => { state.extras = r; }).catch(() => {});
+  }
+  extrasPoll();
+}
+
+$('#detectBtn').onclick = async () => {
+  if (!ne) return;
+  const r = await api(`/projects/${state.current.id}/extras`, { method: 'POST', body: { retry: `notes:${ne.stem}` } }).catch((e) => { toast(e.message); });
+  if (r) { state.extras = r; showWaiting(); }
+};
+
+// keep an eye on background work for the open song
+let extrasTimer = null;
+function extrasPoll() {
+  clearTimeout(extrasTimer);
+  const p = state.current;
+  if (!p || p.status !== 'ready') return;
+  extrasTimer = setTimeout(async () => {
+    const cur = state.current;
+    if (!cur || cur.id !== p.id) return;
+    let r;
+    try { r = await api(`/projects/${p.id}/extras`); } catch { return; }
+    const before = JSON.stringify((state.extras || {}).status || {});
+    state.extras = r;
+    const changed = JSON.stringify(r.status || {}) !== before;
+    if (changed) {
+      const fresh = await api('/projects/' + p.id).catch(() => null);
+      if (fresh && state.current && state.current.id === p.id) {
+        state.current.note_edits = fresh.note_edits;
+        state.current.sheet = fresh.sheet;
+        state.current.extras = fresh.extras;
+      }
+    }
+    if (ne && ne.kind === 'part' && !ne.has && state.noteMode !== 'sheet') {
+      const done = ((r.status || {}).notes || {})[ne.stem] === 'done';
+      if (done) openNotes(ne.stem); else showWaiting();
+    }
+    if (ne && state.noteMode === 'sheet' && (changed || r.now)) paintSheetStatus(changed);
+    if (r.now || (r.queued && r.queued.length)) extrasPoll();
+  }, 1200);
 }
 
 function enterNoteView() {
   $('#projectView').classList.add('notes-open');
   $('#noteView').hidden = false;
-  $('#noteTitle').textContent = isSynth(ne.stem) ? stemLabel(ne.stem) : `${stemLabel(ne.stem)} notes`;
+  $('#noteTitle').textContent = stemLabel(ne.stem);
+  $$('#viewSeg button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.view === (state.noteMode || 'roll'))));
   $('#noteView').style.setProperty('--c', color(ne.stem));
   $('#synthTools').hidden = ne.kind !== 'synth';
   if (ne.kind === 'synth') fillSynthTools();
@@ -84,20 +164,6 @@ function setHear(mode) {
 }
 $$('#hearSeg button').forEach((b) => b.addEventListener('click', () => setHear(b.dataset.hear)));
 
-function showDetect() {
-  $('#rollWrap').hidden = true;
-  $('#noteHelp').hidden = true;
-  $('#noteDetect').hidden = false;
-  $$('.note-bar #undoBtn, .note-bar #resetNotesBtn, .note-bar #redetectBtn, .note-bar .zoom, .note-bar .inline')
-    .forEach((el) => { el.hidden = true; });
-  const v = ne.base === 'render' ? 'Edited' : 'Original';
-  $('#detectText').textContent = `Stemlab will listen to the ${stemLabel(ne.stem).toLowerCase()} part (${v} version) and write out every note it hears, so you can change them.`;
-  $('#detectBtn').hidden = false;
-  $('#detectProgress').hidden = true;
-  $('#noteStatus').textContent = '';
-}
-
-$('#detectBtn').onclick = () => detectNotes();
 $('#redetectBtn').onclick = () => {
   if (confirm('Find the notes again? This throws away your note edits for this part.')) detectNotes();
 };
@@ -105,9 +171,11 @@ $('#redetectBtn').onclick = () => {
 async function detectNotes() {
   const p = state.current;
   if (!ne) return;
-  showDetect();
+  ne.has = false;
+  $('#rollWrap').hidden = true; $('#noteDetect').hidden = false;
   $('#detectBtn').hidden = true;
   $('#detectProgress').hidden = false;
+  $('#detectText').textContent = 'Finding the notes again…';
   const stem = ne.stem;
   try {
     const r = await api(`/projects/${p.id}/notes/${stem}/detect`, { method: 'POST', body: { base: state.version } });
@@ -134,17 +202,19 @@ async function detectNotes() {
   } catch (e) {
     noteJob = null;
     toast("Couldn't find notes: " + e.message);
-    if (ne) showDetect();
+    if (ne) showWaiting();
   }
 }
 
 async function showRoll() {
+  $('#sheetView').hidden = true;
   $('#noteDetect').hidden = true;
   $('#rollWrap').hidden = false;
   $('#noteHelp').hidden = false;
   $$('.note-bar #undoBtn, .note-bar #resetNotesBtn, .note-bar #redetectBtn, .note-bar .zoom, .note-bar .inline')
     .forEach((el) => { el.hidden = false; });
   $('#resetNotesBtn').hidden = $('#redetectBtn').hidden = ne.kind === 'synth';
+  $('#synthTools').hidden = ne.kind !== 'synth';
   fitRange();
   status();
   layoutRoll();
@@ -155,12 +225,8 @@ async function showRoll() {
   followPlayhead(true);
   sc.focus({ preventScroll: true });
   if (ne.kind === 'synth') return;
-  // the original audio of this part, for previews and as the sound source
-  try {
-    const res = await fetch(audioUrl(state.current.id, ne.base, ne.stem));
-    const buf = await player.ctx.decodeAudioData(await res.arrayBuffer());
-    if (ne) ne.srcBuf = buf;
-  } catch { /* previews just stay silent */ }
+  // the part's original audio, streamed, for hearing notes as you move them
+  ne.srcUrl = audioUrl(state.current.id, ne.base, ne.stem);
 }
 
 function fitRange() {
@@ -242,7 +308,7 @@ function snap(t) {
 
 function drawRoll(pos) {
   if (!ne) return;
-  if ($('#rollWrap').hidden) { drawTracks(pos, { x: 0, y: 0 }); return; }
+  if ($('#rollWrap').hidden) { drawTracks(pos, { x: 0, y: 0 }); followSheet(pos); return; }
   const cv = $('#roll');
   const dpr = window.devicePixelRatio || 1;
   const W = cv.clientWidth, H = cv.clientHeight;
@@ -372,25 +438,28 @@ function followPlayhead(force) {
 
 // ------------------------------------------------------------------ hearing notes
 
+const previewEl = new Audio();
+previewEl.crossOrigin = 'anonymous';
+previewEl.preservesPitch = false;
+let previewTimer = null;
+
 function preview(n, midi) {
   if (ne && ne.kind === 'synth') { synthPreview((state.current.synths[ne.stem] || {}).preset, midi ?? n.midi, Math.min(0.6, n.end - n.start)); return; }
-  if (!ne || !ne.srcBuf || !player.ctx) return;
+  if (!ne || !ne.srcUrl) return;
   const src = n.src ? ne.detected.find((d) => d.id === n.src) : n;
   if (!src) return;
-  const ctx = player.ctx;
-  if (ctx.state === 'suspended') ctx.resume();
-  const s = ctx.createBufferSource();
-  s.buffer = ne.srcBuf;
-  s.playbackRate.value = Math.pow(2, ((midi ?? n.midi) - src.orig_midi) / 12);
-  const g = ctx.createGain();
+  const rate = Math.pow(2, ((midi ?? n.midi) - src.orig_midi) / 12);
   const len = Math.min(1.2, src.orig_end - src.orig_start + 0.05);
-  const now = ctx.currentTime;
-  g.gain.setValueAtTime(0, now);
-  g.gain.linearRampToValueAtTime(0.9, now + 0.01);
-  g.gain.setValueAtTime(0.9, now + len / s.playbackRate.value - 0.03);
-  g.gain.linearRampToValueAtTime(0, now + len / s.playbackRate.value);
-  s.connect(g); g.connect(player.master);
-  s.start(now, Math.max(0, src.orig_start - 0.005), len);
+  if (previewEl.src !== ne.srcUrl) previewEl.src = ne.srcUrl;
+  clearTimeout(previewTimer);
+  const go = () => {
+    previewEl.playbackRate = Math.max(0.25, Math.min(4, rate));
+    previewEl.volume = 0.9;
+    previewEl.play().catch(() => {});
+    previewTimer = setTimeout(() => previewEl.pause(), (len / previewEl.playbackRate) * 1000);
+  };
+  previewEl.currentTime = Math.max(0, src.orig_start - 0.005);
+  if (previewEl.readyState >= 2) go(); else previewEl.addEventListener('canplay', go, { once: true });
 }
 
 // ------------------------------------------------------------------ editing
@@ -664,22 +733,22 @@ function noteKey(e) {
 
 const envCache = new Map(); // part -> {buf, env}
 function envelope(part) {
-  const buf = player.buffers[part];
-  if (!buf) return null;
+  const t = player.buffers[part];
+  if (!t || !t.peaks) return null;
   const c = envCache.get(part);
-  if (c && c.buf === buf) return c.env;
-  const a = buf.getChannelData(0);
-  const per = Math.floor(buf.sampleRate / 50);
-  const env = new Float32Array(Math.ceil(a.length / per));
-  let top = 1e-6;
+  if (c && c.peaks === t.peaks) return c.env;
+  // 50 values a second, scaled so quiet parts stay quiet
+  const step = Math.max(1, Math.round(t.rate / 50));
+  const env = new Float32Array(Math.ceil(t.peaks.length / step));
+  let top = 0;
   for (let i = 0; i < env.length; i++) {
     let m = 0;
-    for (let j = i * per, e = Math.min(a.length, j + per); j < e; j += 8) { const v = Math.abs(a[j]); if (v > m) m = v; }
+    for (let j = i * step, e = Math.min(t.peaks.length, j + step); j < e; j++) if (t.peaks[j] > m) m = t.peaks[j];
     env[i] = m; if (m > top) top = m;
   }
   top = Math.max(top, 0.25);
   for (let i = 0; i < env.length; i++) env[i] /= top;
-  envCache.set(part, { buf, env });
+  envCache.set(part, { peaks: t.peaks, env });
   return env;
 }
 
@@ -793,15 +862,16 @@ function fillSynthTools() {
   ps.value = sy.preset;
   const cf = $('#copyFrom');
   cf.innerHTML = '';
-  const srcs = p.stems.filter((s) => p.note_edits && p.note_edits[s]);
+  const count = (s) => ((p.note_edits && p.note_edits[s] && p.note_edits[s].notes) || []).length;
+  const srcs = p.stems.filter((s) => count(s) > 0).sort((a, b) => count(b) - count(a));
   for (const s of srcs) {
     const o = document.createElement('option');
-    o.value = s; o.textContent = stemLabel(s);
+    o.value = s; o.textContent = `${stemLabel(s)} (${count(s)} notes)`;
     cf.append(o);
   }
   if (!srcs.length) {
     const o = document.createElement('option');
-    o.value = ''; o.textContent = 'no parts with notes yet';
+    o.value = ''; o.textContent = 'no notes found yet';
     cf.append(o);
   }
   cf.disabled = $('#copyBtn').disabled = !srcs.length;

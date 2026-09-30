@@ -184,6 +184,8 @@ async function refreshList() {
   renderList();
 }
 
+state.expanded = new Set();
+
 function renderList() {
   const nav = $('#songList');
   nav.innerHTML = '';
@@ -195,26 +197,128 @@ function renderList() {
     return;
   }
   for (const p of state.projects) {
+    const isCur = !!(state.current && state.current.id === p.id);
+    const open = state.expanded.has(p.id) && p.status === 'ready';
+    const row = document.createElement('div');
+    row.className = 'song-row';
+    const caret = document.createElement('button');
+    caret.className = 'caret';
+    caret.setAttribute('aria-expanded', String(open));
+    caret.setAttribute('aria-label', `${open ? 'Hide' : 'Show'} the parts of ${p.title || 'Untitled'}`);
+    caret.innerHTML = '<svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true"><path d="M3 1.5 7 5 3 8.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    caret.disabled = p.status !== 'ready';
+    caret.onclick = (e) => {
+      e.stopPropagation();
+      if (state.expanded.has(p.id)) state.expanded.delete(p.id); else state.expanded.add(p.id);
+      renderList();
+    };
     const b = document.createElement('button');
     b.className = 'song-item';
-    b.setAttribute('aria-current', String(state.current && state.current.id === p.id));
+    b.setAttribute('aria-current', String(isCur && !state.focus));
+    b.title = 'Double-click to rename';
     const left = document.createElement('div');
     left.style.minWidth = '0';
     const t = document.createElement('div'); t.className = 't'; t.textContent = p.title || 'Untitled';
     left.append(t);
-    if (p.artist) { const a = document.createElement('div'); a.className = 'a'; a.textContent = p.artist; left.append(a); }
+    if (p.artist) { const ar = document.createElement('div'); ar.className = 'a'; ar.textContent = p.artist; left.append(ar); }
     b.append(left);
     if (p.status !== 'ready') {
-      const s = document.createElement('span');
-      s.className = 'state' + (p.status === 'error' ? ' err' : '');
+      const st = document.createElement('span');
+      st.className = 'state' + (p.status === 'error' ? ' err' : '');
       const job = state.jobs[p.id];
-      s.textContent = p.status === 'error' ? STATUS_TEXT.error
+      st.textContent = p.status === 'error' ? STATUS_TEXT.error
         : job ? `${Math.round(job.progress * 100)}%` : STATUS_TEXT[p.status] || '';
-      b.append(s);
+      b.append(st);
     }
-    b.onclick = () => openProject(p.id);
-    nav.append(b);
+    b.onclick = () => { state.expanded.add(p.id); openProject(p.id, null); };
+    b.ondblclick = (e) => { e.preventDefault(); startRename(p, t); };
+    b.onkeydown = (e) => { if (e.key === 'F2') { e.preventDefault(); startRename(p, t); } };
+    row.append(caret, b);
+    nav.append(row);
+    if (open) {
+      const list = document.createElement('div');
+      list.className = 'part-list';
+      const all = [...(p.stems || []), ...(p.synths || []).map((x) => x.id)];
+      for (const part of all) {
+        const pb = document.createElement('button');
+        pb.className = 'part-item';
+        pb.style.setProperty('--c', color(part));
+        const syn = (p.synths || []).find((x) => x.id === part);
+        pb.textContent = syn ? syn.name : (STEM_LABEL[part] || part);
+        pb.setAttribute('aria-current', String(isCur && state.focus === part));
+        pb.onclick = () => openPart(p.id, part);
+        list.append(pb);
+      }
+      nav.append(list);
+    }
   }
+}
+
+async function openPart(pid, part) {
+  if (!state.current || state.current.id !== pid) await openProject(pid, part);
+  else setFocus(part);
+}
+
+// show one part by itself (and hear it alone) until "Show all parts"
+function setFocus(part) {
+  state.focus = part;
+  state.focusHearAll = false;
+  if (typeof ne !== 'undefined' && ne) {
+    if (ne.stem !== part) openNotes(part);
+  }
+  paintFocus();
+  renderList();
+}
+function paintFocus() {
+  const f = state.focus;
+  for (const [s, l] of Object.entries(lanes)) l.el.hidden = !!f && s !== f;
+  const bar = $('#focusBar');
+  if (bar) {
+    bar.hidden = !f;
+    if (f) {
+      $('#focusText').textContent = `Showing ${stemLabel(f)} only`;
+      $('#focusHear').textContent = state.focusHearAll ? 'Hear only this part' : 'Hear the whole song';
+    }
+  }
+  $('.add-row') && ($('.add-row').hidden = !!f);
+  applyMix();
+  requestAnimationFrame(drawWaveImages);
+}
+
+function startRename(p, el) {
+  const input = document.createElement('input');
+  input.className = 'rename';
+  input.value = p.title || '';
+  input.setAttribute('aria-label', 'Song name');
+  el.replaceWith(input);
+  input.focus();
+  input.select();
+  let done = false;
+  const finish = async (save) => {
+    if (done) return;
+    done = true;
+    const v = input.value.trim();
+    if (save && v && v !== p.title) await renameSong(p.id, v);
+    else renderList();
+  };
+  input.onkeydown = (e) => {
+    e.stopPropagation();
+    if (e.key === 'Enter') finish(true);
+    if (e.key === 'Escape') finish(false);
+  };
+  input.onblur = () => finish(true);
+  input.onclick = (e) => e.stopPropagation();
+  input.ondblclick = (e) => e.stopPropagation();
+}
+
+async function renameSong(pid, title) {
+  try {
+    await api('/projects/' + pid, { method: 'PATCH', body: { title } });
+    const item = state.projects.find((x) => x.id === pid);
+    if (item) item.title = title;
+    if (state.current && state.current.id === pid) { state.current.title = title; paintHeader(); }
+  } catch (e) { toast("Couldn't rename: " + e.message); }
+  renderList();
 }
 
 // ------------------------------------------------------------------ import
@@ -310,9 +414,18 @@ async function pollJobs() {
 
 // ------------------------------------------------------------------ open a song
 
-async function openProject(pid) {
+async function openProject(pid, focus) {
+  // same song: just change what's shown, don't reload anything
+  if (state.current && state.current.id === pid && state.current.status === 'ready' && state.view === 'projectView') {
+    if (focus) setFocus(focus);
+    else { state.focus = null; paintFocus(); renderList(); }
+    return;
+  }
+  const wasNotes = typeof ne !== 'undefined' && !!ne;
   player.stop();
   closeNotes(true);
+  state.focus = focus || null;
+  state.focusHearAll = false;
   let p;
   try { p = await api('/projects/' + pid); } catch (e) { toast(e.message); await refreshList(); return; }
   state.current = p;
@@ -327,6 +440,13 @@ async function openProject(pid) {
   buildEditor(p);
   buildLanes(p);
   await loadVersion();
+  paintFocus();
+  if (wasNotes || state.openNotesNext) {
+    state.openNotesNext = false;
+    const target = focus || (p.stems.includes('vocals') ? 'vocals' : p.stems[0]);
+    openNotes(target);
+  }
+  extrasPoll();
 }
 
 function paintWork() {
@@ -379,91 +499,137 @@ $('#deleteBtn').onclick = removeCurrent;
 // ------------------------------------------------------------------ audio engine (playback)
 
 class Player {
+  // Each part streams from the engine through its own <audio> element into Web Audio (for
+  // per-part volume). Nothing is decoded up front, so a 10-minute song opens as fast as a
+  // 2-minute one. Parts are kept in step by nudging their playback rate.
   constructor() {
     this.ctx = null;
-    this.buffers = {};
+    this.buffers = {};   // part -> {el, node, duration, peaks, rate}  (name kept for older callers)
     this.gains = {};
-    this.sources = [];
     this.playing = false;
     this.offset = 0;
-    this.startedAt = 0;
     this.duration = 0;
     this.loopOn = false;
     this.loopA = 0;
     this.loopB = 0;
     this.loadToken = 0;
+    this.startToken = 0;
+    this.lastSync = 0;
   }
   ensure() {
     if (!this.ctx) {
-      this.ctx = new AudioContext({ sampleRate: 44100, latencyHint: 'playback' });
+      this.ctx = new AudioContext({ latencyHint: 'playback' });
       this.master = this.ctx.createGain();
       this.master.connect(this.ctx.destination);
     }
   }
-  async load(urls, onProgress) {
+  gainFor(n) {
+    this.ensure();
+    if (!this.gains[n]) { this.gains[n] = this.ctx.createGain(); this.gains[n].connect(this.master); }
+    return this.gains[n];
+  }
+  makeTrack(n, url) {
+    const el = new Audio();
+    el.crossOrigin = 'anonymous';
+    el.preload = 'auto';
+    el.preservesPitch = true;
+    el.src = url;
+    const node = this.ctx.createMediaElementSource(el);
+    node.connect(this.gainFor(n));
+    const t = { el, node, duration: 0, peaks: null, rate: 100 };
+    t.ready = new Promise((resolve, reject) => {
+      el.addEventListener('loadedmetadata', () => { t.duration = el.duration || 0; resolve(); }, { once: true });
+      el.addEventListener('error', () => reject(new Error(`Couldn't load the ${stemLabel(n)} part`)), { once: true });
+    });
+    return t;
+  }
+  dropTrack(n) {
+    const t = this.buffers[n];
+    if (!t) return;
+    t.el.pause();
+    t.el.removeAttribute('src');
+    t.el.load();
+    t.node.disconnect();
+    delete this.buffers[n];
+  }
+  async load(urls, onProgress, peakUrls) {
     this.ensure();
     this.stop();
-    this.buffers = {};
+    Object.keys(this.buffers).forEach((n) => this.dropTrack(n));
     const token = ++this.loadToken;
-    let done = 0;
     const names = Object.keys(urls);
-    const decoded = await Promise.all(names.map(async (n) => {
-      const res = await fetch(urls[n]);
-      if (!res.ok) throw new Error(`Couldn't load the ${n} part`);
-      const buf = await this.ctx.decodeAudioData(await res.arrayBuffer());
+    names.forEach((n) => { this.buffers[n] = this.makeTrack(n, urls[n]); });
+    let done = 0;
+    await Promise.all(names.map(async (n) => {
+      const t = this.buffers[n];
+      await t.ready;
+      await this.loadPeaks(t, (peakUrls && peakUrls[n]) || urls[n].replace('/audio/', '/peaks/')).catch(() => {});
       onProgress && onProgress(++done / names.length);
-      return buf;
     }));
     if (token !== this.loadToken) return false;
-    names.forEach((n, i) => { this.buffers[n] = decoded[i]; });
-    this.duration = Math.max(...decoded.map((b) => b.duration));
+    this.duration = Math.max(0, ...names.map((n) => this.buffers[n].duration));
     this.offset = Math.min(this.offset, this.duration);
     this.loopA = 0; this.loopB = this.duration;
-    names.forEach((n) => {
-      if (!this.gains[n]) { this.gains[n] = this.ctx.createGain(); this.gains[n].connect(this.master); }
-    });
     return true;
+  }
+  async loadPeaks(t, url) {
+    const r = await fetch(url);
+    if (!r.ok) return;
+    const j = await r.json();
+    const bin = atob(j.data);
+    const q = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) q[i] = bin.charCodeAt(i);
+    const peaks = new Float32Array(q.length);
+    for (let i = 0; i < q.length; i++) { const v = q[i] / 255; peaks[i] = v * v; }
+    t.peaks = peaks; t.rate = j.rate;
+  }
+  master_() {
+    let best = null;
+    for (const t of Object.values(this.buffers)) if (!best || t.duration > best.duration) best = t;
+    return best;
   }
   position() {
     if (!this.playing) return this.offset;
-    let pos = this.offset + (this.ctx.currentTime - this.startedAt);
-    if (this.loopOn && this.offset < this.loopB && pos > this.loopB) {
-      const len = this.loopB - this.loopA;
-      pos = this.loopA + ((pos - this.loopA) % len);
-    }
-    return pos;
+    const m = this.master_();
+    return m ? m.el.currentTime : this.offset;
   }
-  play() {
-    if (!Object.keys(this.buffers).length) return;
+  async play() {
+    const tracks = Object.values(this.buffers);
+    if (!tracks.length) return;
     this.ensure();
     if (this.ctx.state === 'suspended') this.ctx.resume();
     if (this.offset >= this.duration - 0.05) this.offset = 0;
     if (this.loopOn && (this.offset < this.loopA || this.offset >= this.loopB)) this.offset = this.loopA;
-    const when = this.ctx.currentTime + 0.03;
-    this.sources = Object.entries(this.buffers).map(([n, buf]) => {
-      const s = this.ctx.createBufferSource();
-      s.buffer = buf;
-      if (this.loopOn) { s.loop = true; s.loopStart = this.loopA; s.loopEnd = this.loopB; }
-      s.connect(this.gains[n]);
-      s.start(when, Math.min(this.offset, buf.duration));
-      return s;
-    });
-    this.startedAt = when;
+    const token = ++this.startToken;
     this.playing = true;
+    await Promise.all(tracks.map((t) => this.cue(t, this.offset)));
+    if (token !== this.startToken || !this.playing) return;
+    for (const t of tracks) {
+      t.el.playbackRate = 1;
+      if (this.offset < t.duration) t.el.play().catch(() => {});
+    }
+  }
+  cue(t, time) {
+    return new Promise((resolve) => {
+      const el = t.el;
+      const done = () => { el.removeEventListener('seeked', done); el.removeEventListener('canplay', done); resolve(); };
+      if (Math.abs(el.currentTime - time) < 0.005 && el.readyState >= 3) { resolve(); return; }
+      el.addEventListener('seeked', done, { once: true });
+      el.currentTime = Math.min(time, Math.max(0, t.duration - 0.01));
+      setTimeout(done, 1500);
+    });
   }
   pause() {
     if (!this.playing) return;
     this.offset = Math.min(this.position(), this.duration);
-    this.killSources();
+    this.startToken++;
+    Object.values(this.buffers).forEach((t) => t.el.pause());
     this.playing = false;
   }
   stop() {
-    this.killSources();
+    this.startToken++;
+    Object.values(this.buffers).forEach((t) => t.el.pause());
     this.playing = false;
-  }
-  killSources() {
-    this.sources.forEach((s) => { try { s.stop(); } catch { /* already stopped */ } s.disconnect(); });
-    this.sources = [];
   }
   seek(t) {
     const was = this.playing;
@@ -478,15 +644,38 @@ class Player {
     if (a !== undefined) { this.loopA = a; this.loopB = b; }
     if (was) this.play();
   }
-  async replace(n, url) {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`Couldn't load the ${n} part`);
-    const buf = await this.ctx.decodeAudioData(await res.arrayBuffer());
+  // called every frame: keep parts together, handle looping and the end of the song
+  tick() {
+    if (!this.playing) return;
+    const m = this.master_();
+    if (!m) return;
+    const pos = m.el.currentTime;
+    if (this.loopOn && pos >= this.loopB) { this.seek(this.loopA); return; }
+    if (m.el.ended || pos >= this.duration - 0.01) { this.stop(); this.offset = 0; return; }
+    const now = performance.now();
+    if (now - this.lastSync < 200) return;
+    this.lastSync = now;
+    for (const t of Object.values(this.buffers)) {
+      if (t === m || t.el.paused || pos >= t.duration) continue;
+      const d = t.el.currentTime - pos;
+      if (Math.abs(d) > 0.15) { t.el.currentTime = pos; t.el.playbackRate = 1; }
+      else if (Math.abs(d) > 0.01) t.el.playbackRate = Math.max(0.97, Math.min(1.03, 1 - d * 1.5));
+      else t.el.playbackRate = 1;
+    }
+  }
+  async replace(n, url, peakUrl) {
+    this.ensure();
     const was = this.playing;
+    const pos = this.position();
     if (was) this.pause();
-    this.buffers[n] = buf;
+    this.dropTrack(n);
+    const t = this.buffers[n] = this.makeTrack(n, url);
+    await t.ready;
+    await this.loadPeaks(t, peakUrl || url.replace('/audio/', '/peaks/')).catch(() => {});
+    this.duration = Math.max(0, ...Object.values(this.buffers).map((x) => x.duration));
+    this.offset = pos;
     if (was) this.play();
-    return buf;
+    return t;
   }
   setGain(n, v) {
     const g = this.gains[n];
@@ -579,6 +768,7 @@ function applyMix() {
   const anySolo = parts(p).some((s) => mix[s].solo);
   for (const s of parts(p)) {
     let on = anySolo ? mix[s].solo : !mix[s].mute;
+    if (state.focus && !state.focusHearAll) on = s === state.focus;
     if (state.noteSolo) on = s === state.noteSolo;
     player.setGain(s, on ? mix[s].vol : 0);
     const l = lanes[s];
@@ -616,26 +806,19 @@ function drawWaveImages() {
   const info = {};
   let loudest = 1e-6;
   for (const [s, l] of Object.entries(lanes)) {
-    const buf = player.buffers[s];
+    const t = player.buffers[s];
     const w = Math.max(1, Math.floor(l.canvas.clientWidth * dpr));
     const h = Math.max(1, Math.floor(l.canvas.clientHeight * dpr));
     l.canvas.width = w; l.canvas.height = h;
-    if (!buf) { l.dim = l.bright = null; continue; }
-    const a = buf.getChannelData(0);
-    const b = buf.numberOfChannels > 1 ? buf.getChannelData(1) : a;
-    let dc = 0;
-    for (let i = 0; i < a.length; i += 64) dc += (a[i] + b[i]) * 0.5;
-    dc /= Math.ceil(a.length / 64);
-    const cols = Math.max(1, Math.floor(w * (buf.duration / player.duration)));
-    const per = a.length / cols;
+    if (!t || !t.peaks || !player.duration) { l.dim = l.bright = null; continue; }
+    const cols = Math.max(1, Math.floor(w * (t.duration / player.duration)));
+    const per = t.peaks.length / cols;
     const peaks = new Float32Array(cols);
     let top = 0;
     for (let x = 0; x < cols; x++) {
-      const i0 = Math.floor(x * per), i1 = Math.floor((x + 1) * per);
       let mx = 0;
-      for (let i = i0; i < i1; i += 4) {
-        const v = Math.abs((a[i] + b[i]) * 0.5 - dc);
-        if (v > mx) mx = v;
+      for (let i = Math.floor(x * per), e = Math.max(i + 1, Math.floor((x + 1) * per)); i < e && i < t.peaks.length; i++) {
+        if (t.peaks[i] > mx) mx = t.peaks[i];
       }
       peaks[x] = mx;
       if (mx > top) top = mx;
@@ -758,6 +941,7 @@ $('#loopCheck').addEventListener('change', (e) => {
 });
 
 function frame() {
+  player.tick();
   if (state.view === 'projectView' && player.duration) {
     let pos = player.position();
     if (player.playing && !player.loopOn && pos >= player.duration) {
@@ -865,6 +1049,31 @@ $$('#versionSeg button').forEach((b) => b.addEventListener('click', () => {
   state.version = b.dataset.version;
   loadVersion();
 }));
+
+$('#songTitle').title = 'Click to rename';
+$('#songTitle').addEventListener('click', () => {
+  const p = state.current;
+  if (p && !$('#songTitle input')) startHeaderRename(p);
+});
+function startHeaderRename(p) {
+  const h = $('#songTitle');
+  const input = document.createElement('input');
+  input.className = 'rename big';
+  input.value = p.title || '';
+  input.setAttribute('aria-label', 'Song name');
+  h.textContent = '';
+  h.append(input);
+  input.focus(); input.select();
+  let done = false;
+  const finish = async (save) => {
+    if (done) return;
+    done = true;
+    const v = input.value.trim();
+    if (save && v && v !== p.title) await renameSong(p.id, v); else paintHeader();
+  };
+  input.onkeydown = (e) => { e.stopPropagation(); if (e.key === 'Enter') finish(true); if (e.key === 'Escape') finish(false); };
+  input.onblur = () => finish(true);
+}
 
 function paintHeader() {
   const p = state.current;
@@ -1040,6 +1249,9 @@ async function pollRender() {
   }
 }
 
+$('#focusAll').onclick = () => { state.focus = null; paintFocus(); renderList(); };
+$('#focusHear').onclick = () => { state.focusHearAll = !state.focusHearAll; paintFocus(); };
+
 // ------------------------------------------------------------------ synth parts
 
 let SYNTH_PRESETS = {};
@@ -1070,7 +1282,7 @@ async function removeSynth(sid) {
   if (ne && ne.stem === sid) closeNotes(true);
   await api(`/projects/${p.id}/synths/${sid}`, { method: 'DELETE' });
   delete p.synths[sid];
-  delete player.buffers[sid];
+  player.dropTrack(sid);
   if (player.playing) { player.pause(); player.play(); }
   buildLanes(p);
   markNoteLanes();

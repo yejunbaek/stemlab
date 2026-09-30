@@ -141,6 +141,11 @@
       </div>
 
       <div class="lanes-wrap">
+        <div id="focusBar" class="focus-bar" hidden>
+          <span id="focusText"></span>
+          <button class="btn ghost small" id="focusHear"></button>
+          <button class="btn small" id="focusAll">Show all parts</button>
+        </div>
         <div class="ruler"><div class="ruler-label"></div><canvas id="ruler"></canvas></div>
         <div id="lanes"></div>
       </div>
@@ -148,6 +153,10 @@
       <section id="noteView" aria-label="Note editor" hidden>
         <div class="note-bar">
                     <h3 id="noteTitle"></h3>
+          <div class="seg" id="viewSeg" aria-label="Show">
+            <button data-view="roll" aria-selected="true">Piano roll</button>
+            <button data-view="sheet" aria-selected="false">Chords &amp; lyrics</button>
+          </div>
           <div class="seg" id="hearSeg" aria-label="What to hear">
             <button data-hear="solo" aria-selected="true">This part</button>
             <button data-hear="all" aria-selected="false">Whole song</button>
@@ -180,6 +189,16 @@
         <div id="rollWrap" class="roll-wrap" hidden>
           <canvas id="roll"></canvas>
           <div id="rollScroll" tabindex="0" aria-label="Notes"><div id="rollSpacer"></div></div>
+        </div>
+        <div id="sheetView" class="sheet-view" hidden>
+          <div class="sheet-head">
+            <p id="sheetSource" class="muted small"></p>
+            <div class="spacer"></div>
+            <button class="btn ghost small" id="sheetOwnBtn"></button>
+            <button class="btn ghost small" id="addLineBtn">Add a lyric line at the playhead</button>
+          </div>
+          <p id="sheetStatus" class="muted small" hidden></p>
+          <div id="sheetBody" class="sheet-body"></div>
         </div>
         <p id="noteHelp" class="note-help muted small" hidden>Drag a note up or down to change it, or sideways to move it. Drag its right edge to make it longer. Double-click empty space to add a note. Click a track at the top to edit it. Delete removes, ↑ ↓ change pitch (Shift for an octave). Space plays, ← → jump 5 seconds.</p>
       </section>
@@ -286,6 +305,7 @@
 
 <script src="app.js"></script>
 <script src="notes.js"></script>
+<script src="sheet.js"></script>
 <script src="updates.js"></script>
 </body>
 </html>

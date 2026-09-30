@@ -412,6 +412,7 @@ def render(project_dir, project, settings, progress_cb):
         "bpm": round(float(target_bpm), 1) if target_bpm else analysis.get("bpm"),
         "key": key_name(key["tonic"], key["mode"], shift) if key else None,
         "beats": [round(float(b), 4) for b in out_beats],
+        "time_map": {"src": [round(float(x), 4) for x in src], "dst": [round(float(x), 4) for x in dst]},
     }
 
 

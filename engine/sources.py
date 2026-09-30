@@ -86,7 +86,6 @@ def _ydl_opts(dest_dir, progress_cb, js_runtime):
         "no_warnings": True,
         "progress_hooks": [hook],
         "ffmpeg_location": audio_io.ffmpeg_exe(),
-        "max_downloads": 1,
     }
     if js_runtime:
         opts["js_runtimes"] = {"node": {"path": js_runtime}}
@@ -99,8 +98,6 @@ def download(query_or_url, dest_dir, progress_cb, js_runtime=None):
     try:
         with yt_dlp.YoutubeDL(_ydl_opts(dest_dir, progress_cb, js_runtime)) as ydl:
             info = ydl.extract_info(query_or_url, download=True)
-    except yt_dlp.utils.MaxDownloadsReached:
-        info = None
     except Exception as e:
         msg = str(e).replace("ERROR: ", "")
         raise SourceError("Download failed: " + msg[:300])
