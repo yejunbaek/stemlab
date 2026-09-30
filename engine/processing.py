@@ -399,7 +399,10 @@ def render(project_dir, project, settings, progress_cb):
         done[0] += 1
         progress_cb(0.1 + 0.9 * done[0] / len(jobs), f"Rendered {done[0]} of {len(jobs)} parts")
 
-    workers = max(1, min(3, (os.cpu_count() or 2) // 2))
+    # parts render in parallel (the stretcher runs outside Python's lock); leave one core for the
+    # app, and keep memory to about 2 GB: each worker holds roughly 3 copies of one part
+    per_worker = out_len * 44100 * 2 * 4 * 3
+    workers = max(1, min(len(jobs), (os.cpu_count() or 2) - 1, int(2e9 // max(per_worker, 1))))
     progress_cb(0.1, "Rendering parts")
     with ThreadPoolExecutor(workers) as ex:
         list(ex.map(work, jobs))

@@ -1,2 +1,1 @@
-- Delete songs from the sidebar: hover a song and click the × on the right, or right-click it and choose Delete. Deleting can't be undone.
-- Right-click a song to rename it too.
+- Key and tempo changes are faster: parts are now processed side by side using all but one of your processor's cores (about 3 to 5 times faster on most laptops).

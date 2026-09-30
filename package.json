@@ -1,7 +1,7 @@
 {
   "name": "stemlab",
   "productName": "Stemlab",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "description": "Split songs into instrument parts, then transpose, steady the tempo and tighten the rhythm.",
   "author": "Joseph Baek",
   "main": "app/main.js",
