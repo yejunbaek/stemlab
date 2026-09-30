@@ -68,7 +68,7 @@
     "publish": [
       {
         "provider": "github",
-        "owner": "YejunBaek",
+        "owner": "yejunbaek",
         "repo": "stemlab",
         "releaseType": "release"
       }
@@ -79,6 +79,6 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/YejunBaek/stemlab.git"
+    "url": "https://github.com/yejunbaek/stemlab.git"
   }
 }
