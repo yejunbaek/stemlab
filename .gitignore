@@ -1,0 +1,6 @@
+node_modules/
+dist/
+build/python/
+test/
+engine/__pycache__/
+*.pyc

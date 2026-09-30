@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy"
+  content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src http://127.0.0.1:*; media-src http://127.0.0.1:* blob:">
+<title>Stemlab</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- one-time setup -->
+<section id="setup" class="screen" hidden>
+  <div class="setup-card">
+    <h1 class="wordmark">Stemlab</h1>
+    <p class="lede">Before the first song, Stemlab downloads its audio engine and the model that pulls songs apart into parts. This happens once.</p>
+    <ul class="setup-facts">
+      <li>About 1 GB download, a few minutes on a good connection</li>
+      <li>Everything runs on this computer; your songs never leave it</li>
+    </ul>
+    <label id="gpuRow" class="check" hidden>
+      <input type="checkbox" id="gpuCheck" checked>
+      <span>Use my NVIDIA graphics card<small>Splits songs several times faster. Adds about 2 GB to the download.</small></span>
+    </label>
+    <button id="setupBtn" class="btn primary big">Download and set up</button>
+    <div id="setupProgress" hidden>
+      <div class="bar"><i id="setupBar"></i></div>
+      <p id="setupLabel" class="muted"></p>
+      <details><summary>Details</summary><pre id="setupLog"></pre></details>
+    </div>
+    <p id="setupError" class="error" hidden></p>
+  </div>
+</section>
+
+<!-- starting -->
+<section id="booting" class="screen" hidden>
+  <p class="muted" id="bootMsg">Starting the audio engine…</p>
+</section>
+
+<!-- main app -->
+<div id="app" hidden>
+  <aside id="sidebar">
+    <div class="side-head">
+      <span class="wordmark small">Stemlab</span>
+    </div>
+    <button id="newBtn" class="btn primary wide">Add a song</button>
+    <nav id="songList" aria-label="Your songs"></nav>
+    <div class="side-foot">
+      <span id="versionLabel" class="muted small"></span>
+      <button class="btn ghost small" id="checkUpdateBtn">Check for updates</button>
+    </div>
+  </aside>
+
+  <main id="main">
+    <div id="updateBar" class="update-bar" role="status" hidden>
+      <span id="updateText"></span>
+      <div class="bar" id="updateProgress" hidden><i id="updateFill"></i></div>
+      <div class="spacer"></div>
+      <button class="btn ghost small" id="updateNotesBtn">What's new</button>
+      <button class="btn small" id="updateLaterBtn">Later</button>
+      <button class="btn primary small" id="updateGoBtn">Update now</button>
+    </div>
+    <!-- import -->
+    <section id="importView" class="view" hidden>
+      <div class="import-wrap">
+        <h2 class="display">Add a song</h2>
+        <div id="dropZone" class="drop" tabindex="0">
+          <p class="drop-title">Drop an audio or video file here</p>
+          <p class="muted">MP3, WAV, FLAC, M4A, MP4 and most others</p>
+          <button id="pickFileBtn" class="btn">Choose a file</button>
+        </div>
+        <form id="urlForm" class="url-row">
+          <input id="urlInput" type="url" placeholder="Or paste a YouTube or Spotify song link" autocomplete="off" spellcheck="false">
+          <button class="btn primary" type="submit">Split song</button>
+        </form>
+        <p class="note">Spotify songs are protected, so Stemlab reads the song's name from the link and finds the same song on YouTube. Only use songs you're allowed to download.</p>
+        <p id="importError" class="error" hidden></p>
+      </div>
+    </section>
+
+    <!-- empty -->
+    <section id="emptyView" class="view" hidden>
+      <div class="empty">
+        <h2 class="display">Pull a song apart</h2>
+        <p class="lede">Add a song and Stemlab splits it into vocals, guitar, piano, bass, drums and everything else, so you can hear each part by itself, change the key, and steady the beat.</p>
+        <button class="btn primary big" data-action="new">Add your first song</button>
+      </div>
+    </section>
+
+    <!-- working on a song -->
+    <section id="workView" class="view" hidden>
+      <div class="work">
+        <h2 class="display" id="workTitle"></h2>
+        <p class="muted" id="workArtist"></p>
+        <div class="bar big"><i id="workBar"></i></div>
+        <p id="workStage"></p>
+        <p class="muted small" id="workHint">Splitting takes a few minutes per song. You can add more songs while you wait.</p>
+        <div id="workError" hidden>
+          <p class="error" id="workErrorMsg"></p>
+          <div class="row">
+            <button class="btn primary" id="retryBtn">Retry</button>
+            <button class="btn ghost" id="workDeleteBtn">Remove song</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- editor -->
+    <section id="projectView" class="view" hidden>
+      <header class="song-head">
+        <div class="song-id">
+          <h2 id="songTitle" class="display"></h2>
+          <p id="songMeta" class="muted"></p>
+        </div>
+        <div class="head-actions">
+          <div class="seg" id="modeSeg" aria-label="Screen">
+            <button data-mode="mix" aria-selected="true">Mix</button>
+            <button data-mode="notes" aria-selected="false">Notes</button>
+          </div>
+          <div class="seg" id="versionSeg" role="tablist" aria-label="Which version to play">
+            <button data-version="stems" role="tab">Original</button>
+            <button data-version="render" role="tab">Edited</button>
+          </div>
+          <button class="btn" id="exportBtn">Export</button>
+          <button class="btn ghost icon" id="deleteBtn" title="Remove song" aria-label="Remove song">
+            <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M7 3h6m-9 2h12m-10 0 .7 11h6.6L14 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+      </header>
+
+      <div class="transport">
+        <button id="playBtn" class="play" aria-label="Play">
+          <svg id="playIcon" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M7 4.5v15l13-7.5z" fill="currentColor"/></svg>
+          <svg id="pauseIcon" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" hidden><path d="M6 4h4v16H6zm8 0h4v16h-4z" fill="currentColor"/></svg>
+        </button>
+        <div class="clock"><span id="posTime">0:00</span><span class="muted"> / <span id="durTime">0:00</span></span></div>
+        <label class="loop"><input type="checkbox" id="loopCheck"> Loop</label>
+        <div class="spacer"></div>
+        <span id="loadingMsg" class="muted" hidden>Loading audio…</span>
+        <button class="btn ghost small" id="unsoloBtn" hidden>Clear solo</button>
+      </div>
+
+      <div class="lanes-wrap">
+        <div class="ruler"><div class="ruler-label"></div><canvas id="ruler"></canvas></div>
+        <div id="lanes"></div>
+      </div>
+
+      <section id="noteView" aria-label="Note editor" hidden>
+        <div class="note-bar">
+                    <h3 id="noteTitle"></h3>
+          <div class="seg" id="hearSeg" aria-label="What to hear">
+            <button data-hear="solo" aria-selected="true">This part</button>
+            <button data-hear="all" aria-selected="false">Whole song</button>
+          </div>
+          <span id="synthTools" class="synth-tools" hidden>
+            <label class="small">Sound <select id="presetSelect"></select></label>
+            <label class="small">Copy notes from <select id="copyFrom"></select></label>
+            <select id="copyShift" aria-label="Octave">
+              <option value="-12">an octave down</option>
+              <option value="0" selected>same octave</option>
+              <option value="12">an octave up</option>
+            </select>
+            <button class="btn small" id="copyBtn">Copy</button>
+          </span>
+          <label class="check small inline"><input type="checkbox" id="snapCheck" checked> Snap to beat</label>
+          <label class="zoom small" title="Zoom (Ctrl + scroll)"><svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m13 13 4.5 4.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><input type="range" id="zoomSlider" min="20" max="400" value="90" aria-label="Zoom"></label>
+          <div class="spacer"></div>
+          <span id="noteStatus" class="muted small"></span>
+          <button class="btn ghost small" id="undoBtn" title="Undo (Ctrl+Z)">Undo</button>
+          <button class="btn ghost small" id="resetNotesBtn">Reset notes</button>
+          <button class="btn ghost small" id="redetectBtn">Find notes again</button>
+        </div>
+        <div id="tracksWrap" class="tracks-wrap"><canvas id="tracks"></canvas></div>
+        <div id="noteDetect" class="note-detect" hidden>
+          <p class="lede" id="detectText"></p>
+          <button class="btn primary big" id="detectBtn">Find the notes</button>
+          <div id="detectProgress" hidden><div class="bar"><i id="detectBar"></i></div><p class="muted small" id="detectStage"></p></div>
+          <p class="muted small">Works best on parts that play one note at a time, like vocals, bass or a guitar solo. With chords, it follows the strongest note.</p>
+        </div>
+        <div id="rollWrap" class="roll-wrap" hidden>
+          <canvas id="roll"></canvas>
+          <div id="rollScroll" tabindex="0" aria-label="Notes"><div id="rollSpacer"></div></div>
+        </div>
+        <p id="noteHelp" class="note-help muted small" hidden>Drag a note up or down to change it, or sideways to move it. Drag its right edge to make it longer. Double-click empty space to add a note. Click a track at the top to edit it. Delete removes, ↑ ↓ change pitch (Shift for an octave). Space plays, ← → jump 5 seconds.</p>
+      </section>
+
+      <section class="editor" aria-label="Edit">
+        <div class="group" id="pitchGroup">
+          <h3>Key</h3>
+          <div class="stepper">
+            <button class="btn step" data-step="-1" aria-label="Down a semitone">−</button>
+            <output id="transposeOut">0</output>
+            <button class="btn step" data-step="1" aria-label="Up a semitone">+</button>
+            <span class="muted">semitones</span>
+          </div>
+          <p id="keyLine" class="keyline"></p>
+          <label class="check small"><input type="checkbox" id="tuneCheck"><span id="tuneLabel">Tune to A440</span></label>
+          <label class="check small"><input type="checkbox" id="drumPitchCheck" checked><span>Leave drums at their pitch</span></label>
+        </div>
+
+        <div class="group" id="tempoGroup">
+          <h3>Tempo</h3>
+          <p id="tempoLine" class="muted"></p>
+          <div class="field-row">
+            <label for="bpmInput">Play at</label>
+            <input id="bpmInput" type="number" min="30" max="300" step="0.5">
+            <span class="muted">BPM</span>
+            <button class="btn ghost small" id="bpmReset">Original</button>
+          </div>
+          <label class="slider-label" for="steadySlider">Steady the beat <output id="steadyOut">0%</output></label>
+          <input type="range" id="steadySlider" min="0" max="100" step="5" value="0">
+          <div class="ends"><span>As played</span><span>Locked to the grid</span></div>
+          <p id="noBeat" class="muted small" hidden>No steady beat found in this song, so tempo tools are off. Key changes still work.</p>
+        </div>
+
+        <div class="group" id="tightGroup">
+          <h3>Tighten parts</h3>
+          <p class="muted small">Pulls notes that are slightly early or late onto the beat.</p>
+          <div class="field-row">
+            <label for="gridSelect">Snap to</label>
+            <select id="gridSelect">
+              <option value="2">8th notes</option>
+              <option value="4" selected>16th notes</option>
+            </select>
+          </div>
+          <div id="tightRows"></div>
+        </div>
+
+        <div class="apply">
+          <button class="btn primary big" id="applyBtn">Apply changes</button>
+          <button class="btn ghost small" id="resetBtn">Reset all</button>
+          <div id="renderProgress" hidden>
+            <div class="bar"><i id="renderBar"></i></div>
+            <p class="muted small" id="renderStage"></p>
+          </div>
+          <p id="renderNote" class="muted small"></p>
+        </div>
+      </section>
+    </section>
+  </main>
+</div>
+
+<!-- export dialog -->
+<dialog id="exportDialog">
+  <form method="dialog" id="exportForm">
+    <h3>Export</h3>
+    <fieldset>
+      <legend>Version</legend>
+      <label class="check small"><input type="radio" name="version" value="render"> Edited</label>
+      <label class="check small"><input type="radio" name="version" value="stems"> Original split</label>
+    </fieldset>
+    <fieldset>
+      <legend>Parts</legend>
+      <div id="exportParts" class="parts-grid"></div>
+    </fieldset>
+    <fieldset>
+      <legend>Save as</legend>
+      <label class="check small"><input type="radio" name="mode" value="separate" checked> A separate file for each part</label>
+      <label class="check small"><input type="radio" name="mode" value="mix"> One file with the parts mixed, at your mixer levels</label>
+    </fieldset>
+    <div class="field-row">
+      <label for="formatSelect">Format</label>
+      <select id="formatSelect">
+        <option value="wav">WAV</option>
+        <option value="mp3">MP3 (320 kbps)</option>
+        <option value="flac">FLAC</option>
+      </select>
+    </div>
+    <p id="exportError" class="error" hidden></p>
+    <div class="row end">
+      <button class="btn ghost" value="cancel" formnovalidate>Cancel</button>
+      <button class="btn primary" id="exportGo" value="go">Choose folder and export</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="notesDialog">
+  <form method="dialog">
+    <h3 id="notesTitle">What's new</h3>
+    <div id="notesBody" class="release-notes"></div>
+    <div class="row end"><button class="btn primary" value="ok">Close</button></div>
+  </form>
+</dialog>
+
+<div id="toast" role="status" hidden></div>
+
+<script src="app.js"></script>
+<script src="notes.js"></script>
+<script src="updates.js"></script>
+</body>
+</html>

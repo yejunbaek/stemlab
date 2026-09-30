@@ -1,0 +1,8 @@
+demucs==4.0.1
+librosa==0.11.0
+soundfile>=0.12
+pedalboard==0.9.25
+yt-dlp[default]
+imageio-ffmpeg>=0.5
+flask>=3.0
+numpy<2.3

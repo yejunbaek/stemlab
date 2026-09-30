@@ -1,0 +1,3 @@
+- Stemlab now updates itself. When a new version is out you'll see a bar at the top with Update now, and you can check any time from the bottom of the sidebar.
+- Notes screen: switch a song to Notes to see every track as note blocks along the top, with the piano roll for the selected track below.
+- Synth parts: add a synth, draw notes or copy a melody from another part, and pick from six sounds.

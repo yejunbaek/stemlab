@@ -1,0 +1,41 @@
+# Builds the Windows installer and publishes it as a GitHub release whenever a version tag
+# (like v1.3.0) is pushed. Every installed copy of Stemlab checks these releases for updates.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set the app version from the tag
+        shell: bash
+        run: npm version --no-git-tag-version --allow-same-version "${GITHUB_REF_NAME#v}"
+
+      - run: npm ci
+
+      - name: Bundle a standalone Windows Python
+        shell: bash
+        run: |
+          curl -sSL -o py.tar.gz "https://github.com/astral-sh/python-build-standalone/releases/download/20250317/cpython-3.11.11%2B20250317-x86_64-pc-windows-msvc-install_only.tar.gz"
+          mkdir -p build && tar -xzf py.tar.gz -C build
+          cd build/python
+          find . -name "*.pdb" -delete
+          rm -rf Lib/test Lib/idlelib Lib/tkinter tcl Lib/turtledemo
+
+      - name: Build and publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run release:win
