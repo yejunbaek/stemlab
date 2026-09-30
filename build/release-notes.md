@@ -1,7 +1,2 @@
-- Long songs no longer lag or go silent. Parts now stream as they play instead of loading all at once, so a 10-minute song opens as fast as a short one.
-- Notes are found automatically in the background after a song is split, so the piano roll is ready when you open Notes.
-- New Chords & lyrics view in the Notes screen: chords placed over the words they change on, for each part. Click a chord to change it, drag it onto another word to move it, and double-click a line to fix the lyrics.
-- The sidebar lists each song's parts. Click a part to see and hear it by itself.
-- Rename songs by double-clicking them in the sidebar or clicking the title.
-- Songs added from YouTube or Spotify now keep their real names.
-- The first time lyrics are written out, Stemlab downloads a speech model (about 500 MB).
+- Delete songs from the sidebar: hover a song and click the × on the right, or right-click it and choose Delete. Deleting can't be undone.
+- Right-click a song to rename it too.

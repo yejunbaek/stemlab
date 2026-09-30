@@ -136,7 +136,22 @@ pre#setupLog {
 }
 .side-head { padding: 0 4px; }
 #songList { overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 2px; margin: 0 -6px; padding: 0 6px; }
-.song-row { display: grid; grid-template-columns: 20px 1fr; align-items: center; }
+.song-row { display: grid; grid-template-columns: 20px 1fr; align-items: center; position: relative; }
+.song-del {
+  position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+  width: 24px; height: 24px; border: 0; border-radius: 4px; background: transparent; color: var(--muted);
+  display: grid; place-items: center; cursor: pointer; opacity: 0;
+}
+.song-row:hover .song-del, .song-del:focus-visible { opacity: 1; }
+.song-del:hover { background: #4a2f28; color: #ffd7c9; }
+.song-row:hover .song-item .state { visibility: hidden; }
+.ctx-menu {
+  position: fixed; z-index: 30; min-width: 150px; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 6px; padding: 4px; box-shadow: 0 10px 30px rgba(0,0,0,.45); display: flex; flex-direction: column;
+}
+.ctx-menu button { text-align: left; border: 0; background: transparent; padding: 7px 10px; border-radius: 4px; cursor: pointer; }
+.ctx-menu button:hover, .ctx-menu button:focus-visible { background: #3a3630; outline: none; }
+.ctx-menu button.danger { color: var(--error); }
 .caret { width: 20px; height: 28px; border: 0; background: transparent; color: var(--muted); cursor: pointer; display: grid; place-items: center; border-radius: 3px; padding: 0; }
 .caret svg { transition: transform .12s; }
 .caret[aria-expanded=true] svg { transform: rotate(90deg); }
@@ -156,7 +171,7 @@ input.rename.big { font: inherit; font-stretch: 72%; font-weight: 650; font-size
 .song-item {
   display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px;
   text-align: left; border: 0; background: transparent; border-radius: var(--radius-s);
-  padding: 8px 10px; cursor: pointer;
+  padding: 8px 32px 8px 10px; cursor: pointer;
 }
 .song-item:hover { background: #2a2723; }
 .song-item[aria-current=true] { background: var(--panel); box-shadow: inset 3px 0 0 var(--ivory); }

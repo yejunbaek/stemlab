@@ -231,9 +231,22 @@ function renderList() {
       b.append(st);
     }
     b.onclick = () => { state.expanded.add(p.id); openProject(p.id, null); };
+    const del = document.createElement('button');
+    del.className = 'song-del';
+    del.title = 'Delete song';
+    del.setAttribute('aria-label', `Delete ${p.title || 'Untitled'}`);
+    del.innerHTML = '<svg viewBox="0 0 12 12" width="11" height="11" aria-hidden="true"><path d="M2.5 2.5l7 7m0-7-7 7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
+    del.onclick = (e) => { e.stopPropagation(); deleteSong(p.id); };
+    row.oncontextmenu = (e) => {
+      e.preventDefault();
+      songMenu(e.clientX, e.clientY, [
+        ['Rename', () => startRename(p, t)],
+        ['Delete', () => deleteSong(p.id), 'danger'],
+      ]);
+    };
     b.ondblclick = (e) => { e.preventDefault(); startRename(p, t); };
     b.onkeydown = (e) => { if (e.key === 'F2') { e.preventDefault(); startRename(p, t); } };
-    row.append(caret, b);
+    row.append(caret, b, del);
     nav.append(row);
     if (open) {
       const list = document.createElement('div');
@@ -253,6 +266,30 @@ function renderList() {
     }
   }
 }
+
+function songMenu(x, y, items) {
+  closeSongMenu();
+  const m = document.createElement('div');
+  m.className = 'ctx-menu';
+  m.id = 'ctxMenu';
+  m.setAttribute('role', 'menu');
+  for (const [label, fn, cls] of items) {
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.setAttribute('role', 'menuitem');
+    if (cls) b.className = cls;
+    b.onclick = () => { closeSongMenu(); fn(); };
+    m.append(b);
+  }
+  document.body.append(m);
+  m.style.left = `${Math.min(x, window.innerWidth - m.offsetWidth - 8)}px`;
+  m.style.top = `${Math.min(y, window.innerHeight - m.offsetHeight - 8)}px`;
+  m.querySelector('button').focus();
+}
+function closeSongMenu() { const m = $('#ctxMenu'); if (m) m.remove(); }
+document.addEventListener('pointerdown', (e) => { if (!e.target.closest('#ctxMenu')) closeSongMenu(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSongMenu(); });
+window.addEventListener('blur', closeSongMenu);
 
 async function openPart(pid, part) {
   if (!state.current || state.current.id !== pid) await openProject(pid, part);
@@ -481,18 +518,23 @@ $('#retryBtn').onclick = async () => {
   }
 };
 
-async function removeCurrent() {
-  const p = state.current;
-  if (!p) return;
-  if (!confirm(`Remove "${p.title}" and its parts from Stemlab? Files you exported stay where you saved them.`)) return;
-  player.stop();
-  await api('/projects/' + p.id, { method: 'DELETE' });
-  delete state.mixer[p.id];
-  state.current = null;
+async function deleteSong(pid) {
+  const item = state.projects.find((x) => x.id === pid) || state.current;
+  const title = (item && item.title) || 'Untitled';
+  if (!confirm(`Delete "${title}"? This can't be undone. Files you exported stay where you saved them.`)) return;
+  const isCur = state.current && state.current.id === pid;
+  if (isCur) { player.stop(); closeNotes(true); }
+  try { await api('/projects/' + pid, { method: 'DELETE' }); } catch (e) { toast("Couldn't delete: " + e.message); return; }
+  delete state.mixer[pid];
+  delete state.jobs[pid];
+  state.expanded.delete(pid);
   await refreshList();
+  if (!isCur) return;
+  state.current = null;
   if (state.projects.length) openProject(state.projects[0].id);
   else showView('emptyView');
 }
+function removeCurrent() { if (state.current) deleteSong(state.current.id); }
 $('#workDeleteBtn').onclick = removeCurrent;
 $('#deleteBtn').onclick = removeCurrent;
 
