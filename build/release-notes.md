@@ -1,2 +1,3 @@
-- Fixed "engine error" on Windows when changing the clicker, editing notes or synths, or applying changes while that audio was loaded. Windows doesn't let a file be replaced while it's playing; Stemlab now saves the new version beside it and switches over.
-- The clicker is now a steady, straight beat at the song's tempo, from the very start of the song to the end. Its tempo is shown on the clicker track.
+- Songs that already had a clicker now switch it to the new steady beat automatically the first time you play them.
+- Fixed "engine error" on Windows when changing the clicker, editing notes or synths, or applying changes while that audio was loaded.
+- The clicker is a steady, straight beat at the song's tempo, from the very start of the song to the end.

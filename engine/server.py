@@ -314,10 +314,21 @@ def audio_path(pid, version, name):
         if which not in ("stems", "render"):
             abort(404)
         path = os.path.join(d, "click", which + ".wav")
-        if not os.path.isfile(path):
-            p = load_project(pid)
-            if not p.get("clicker"):
-                abort(404)
+        p = load_project(pid)
+        ck = p.get("clicker")
+        if not ck:
+            abort(404)
+        if ck.get("style") != CLICK_STYLE:
+            # made by an older version (it followed every wobble): remake both as a steady beat
+            with NOTE_LOCKS.setdefault(pid, threading.Lock()):
+                p = load_project(pid)
+                p["clicker"]["style"] = CLICK_STYLE
+                p["clicker"]["stamp"] = time.time()
+                _render_click(pid, p, "stems")
+                if p.get("render"):
+                    _render_click(pid, p, "render")
+                save_project(p)
+        elif not os.path.isfile(audio_io.current(path)):
             _render_click(pid, p, which)
     elif version in ("stems", "render", "notes", "synth"):
         stem = name.rsplit(".", 1)[0]
@@ -788,6 +799,9 @@ def save_sheet(pid):
 
 # --------------------------------------------------------------------------- clicker
 
+CLICK_STYLE = "steady"
+
+
 def _click_beats(p, which):
     if which == "render" and p.get("render"):
         return p["render"].get("beats") or [], p["render"].get("duration") or 0
@@ -824,7 +838,7 @@ def set_clicker(pid):
         else:
             drums = os.path.join(pdir(pid), "stems", "drums.wav")
             offset = clicker_mod.guess_downbeat(beats, drums if os.path.isfile(drums) else None, per_bar)
-        p["clicker"] = {"per_bar": per_bar, "offset": offset, "stamp": time.time()}
+        p["clicker"] = {"per_bar": per_bar, "offset": offset, "stamp": time.time(), "style": CLICK_STYLE}
         _render_click(pid, p, "stems")
         if p.get("render"):
             _render_click(pid, p, "render")
