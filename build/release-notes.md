@@ -1,1 +1,3 @@
-- Key and tempo changes are faster: parts are now processed side by side using all but one of your processor's cores (about 3 to 5 times faster on most laptops).
+- New: Clicker. Click Add clicker under the tracks for a metronome click on every beat of the song, louder on the first beat of each bar. It follows the song's real beat, including any tempo drift, and the Edited version's tempo too. Change the beats per bar, or move beat 1 if the loud click lands in the wrong spot.
+- Faster export: WAV files are now copied straight across (near instant), and MP3/FLAC files are made side by side.
+- Export progress now stays on screen until it's done, then shows where the files went with Show in folder. If something goes wrong, the message stays up with a Copy details button.

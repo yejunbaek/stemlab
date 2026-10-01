@@ -32,7 +32,7 @@ async function openNotes(stem) {
     return;
   }
   let data = null;
-  if (stem !== 'drums') {
+  if (stem !== 'drums' && stem !== 'click') {
     try { data = await api(`/projects/${p.id}/notes/${stem}`); } catch (e) { toast(e.message); return; }
   }
   if (data && data.base !== state.version && state.noteMode !== 'sheet') {
@@ -41,7 +41,7 @@ async function openNotes(stem) {
     await loadVersion();
   }
   ne = {
-    kind: stem === 'drums' ? 'drums' : 'part', hear: hear || 'solo', stem, base: data ? data.base : 'stems',
+    kind: stem === 'drums' || stem === 'click' ? 'drums' : 'part', hear: hear || 'solo', stem, base: data ? data.base : 'stems',
     detected: data ? data.detected : [], notes: data ? clone(data.notes) : [],
     has: !!data, sel: new Set(), undo: [], pps: +$('#zoomSlider').value, rowH: 14,
     lo: 36, hi: 84, drag: null, saving: false, again: false, timer: null,
@@ -63,7 +63,9 @@ function showWaiting() {
   $('#noteStatus').textContent = '';
   const btn = $('#detectBtn');
   if (ne.kind === 'drums') {
-    $('#detectText').textContent = "Drums don't play notes, so there's nothing to show in the piano roll. Switch to Chords & lyrics, or pick another track above.";
+    $('#detectText').textContent = ne.stem === 'click'
+      ? "The clicker only plays the beat, so there are no notes to show. Pick another track above."
+      : "Drums don't play notes, so there's nothing to show in the piano roll. Switch to Chords & lyrics, or pick another track above.";
     btn.hidden = true; $('#detectProgress').hidden = true;
     return;
   }

@@ -55,8 +55,13 @@ def write(path, audio, sr=SR):
 def encode(src_wav, dst, fmt):
     if fmt == "wav":
         if os.path.abspath(src_wav) != os.path.abspath(dst):
-            data, sr = sf.read(src_wav, dtype="float32", always_2d=True)
-            sf.write(dst, data, sr, subtype="PCM_16")
+            info = sf.info(src_wav)
+            if info.subtype == "PCM_16" and info.samplerate == SR:
+                import shutil
+                shutil.copyfile(src_wav, dst)   # already the right kind of WAV: just copy it
+            else:
+                data, sr = sf.read(src_wav, dtype="float32", always_2d=True)
+                sf.write(dst, data, sr, subtype="PCM_16")
         return
     if fmt == "flac":
         data, sr = sf.read(src_wav, dtype="float32", always_2d=True)
@@ -64,6 +69,6 @@ def encode(src_wav, dst, fmt):
         return
     if fmt == "mp3":
         _run([ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error", "-i", src_wav,
-              "-c:a", "libmp3lame", "-b:a", "320k", dst])
+              "-c:a", "libmp3lame", "-b:a", "320k", "-compression_level", "2", dst])
         return
     raise ValueError("Unknown format " + fmt)

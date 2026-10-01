@@ -427,3 +427,8 @@ legend { font-weight: 600; margin-bottom: 4px; padding: 0; }
 }
 .export-panel .ep-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .export-panel p { margin: 0; word-break: break-all; user-select: text; }
+
+.sub-btn { border: 0; background: transparent; color: var(--muted); padding: 0; margin-right: 10px; font: inherit; font-size: 11.5px; cursor: pointer; text-decoration: underline; text-decoration-color: #5a544b; text-underline-offset: 2px; }
+.sub-btn:hover { color: var(--text); }
+
+.lane-name { min-width: 0; }

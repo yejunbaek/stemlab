@@ -17,6 +17,7 @@ import notes as notes_mod  # noqa: E402
 import synth as synth_mod  # noqa: E402
 import chords as chords_mod  # noqa: E402
 import lyrics as lyrics_mod  # noqa: E402
+import clicker as clicker_mod  # noqa: E402
 import processing  # noqa: E402
 import sources  # noqa: E402
 
@@ -133,6 +134,7 @@ def list_projects():
                     p = json.load(fh)
                 item = {k: p.get(k) for k in ("id", "title", "artist", "status", "created", "error", "stems")}
                 item["synths"] = [{"id": k, "name": v.get("name")} for k, v in (p.get("synths") or {}).items()]
+                item["clicker"] = bool(p.get("clicker"))
                 out.append(item)
             except Exception:
                 pass
@@ -241,6 +243,8 @@ def render(pid):
         with HEAVY_LOCK:
             info = processing.render(d, p, settings, progress)
         p["render"] = info
+        if p.get("clicker"):
+            _render_click(pid, p, "render")
         cleared = []
         for stem, ne in list((p.get("note_edits") or {}).items()):
             if ne.get("base") == "render":
@@ -267,6 +271,13 @@ def export(pid):
     version = req.get("version", "render")
     req["_extra"] = list((p.get("synths") or {}).keys())
     req["_paths"] = {sid: os.path.join(d, "synth", sid + ".wav") for sid in req["_extra"]}
+    if p.get("clicker"):
+        which = "render" if version == "render" and p.get("render") else "stems"
+        cpath = os.path.join(d, "click", which + ".wav")
+        if not os.path.isfile(cpath):
+            _render_click(pid, p, which)
+        req["_extra"].append("click")
+        req["_paths"]["click"] = cpath
     req["_paths"].update({stem: os.path.join(d, "notes", stem + ".wav")
                      for stem, ne in (p.get("note_edits") or {}).items()
                      if ne.get("active") and ne.get("base") == version
@@ -297,6 +308,16 @@ def audio_path(pid, version, name):
     d = pdir(pid)
     if version == "original":
         path = os.path.join(d, "original.wav")
+    elif version == "click":
+        which = name.rsplit(".", 1)[0]
+        if which not in ("stems", "render"):
+            abort(404)
+        path = os.path.join(d, "click", which + ".wav")
+        if not os.path.isfile(path):
+            p = load_project(pid)
+            if not p.get("clicker"):
+                abort(404)
+            _render_click(pid, p, which)
     elif version in ("stems", "render", "notes", "synth"):
         stem = name.rsplit(".", 1)[0]
         if not stem.isalnum():
@@ -761,6 +782,62 @@ def save_sheet(pid):
             sheet.setdefault("chord_source", {})[part] = "song"
         save_project(p)
         return jsonify(sheet)
+
+
+# --------------------------------------------------------------------------- clicker
+
+def _click_beats(p, which):
+    if which == "render" and p.get("render"):
+        return p["render"].get("beats") or [], p["render"].get("duration") or 0
+    a = p.get("analysis") or {}
+    return a.get("beats") or [], a.get("duration") or 0
+
+
+def _render_click(pid, p, which):
+    import audio_io
+    beats, dur = _click_beats(p, which)
+    ck = p.get("clicker") or {}
+    audio = clicker_mod.render(beats, dur, int(ck.get("per_bar", 4)), int(ck.get("offset", 0)))
+    os.makedirs(os.path.join(pdir(pid), "click"), exist_ok=True)
+    audio_io.write(os.path.join(pdir(pid), "click", which + ".wav"), audio, clicker_mod.SR)
+
+
+@app.post("/projects/<pid>/clicker")
+def set_clicker(pid):
+    """Add the clicker or change it: per_bar (beats in a bar), offset (which beat is the bar's first)."""
+    body = request.get_json(silent=True) or {}
+    with NOTE_LOCKS.setdefault(pid, threading.Lock()):
+        p = load_project(pid)
+        beats = (p.get("analysis") or {}).get("beats") or []
+        if len(beats) < 8:
+            return jsonify(error="This song has no steady beat to click along to."), 400
+        ck = p.get("clicker") or {}
+        per_bar = int(body.get("per_bar", ck.get("per_bar", 4)))
+        if per_bar not in (2, 3, 4, 5, 6, 7, 8, 12):
+            per_bar = 4
+        if "offset" in body:
+            offset = int(body["offset"]) % per_bar
+        elif ck and per_bar == ck.get("per_bar"):
+            offset = ck.get("offset", 0)
+        else:
+            drums = os.path.join(pdir(pid), "stems", "drums.wav")
+            offset = clicker_mod.guess_downbeat(beats, drums if os.path.isfile(drums) else None, per_bar)
+        p["clicker"] = {"per_bar": per_bar, "offset": offset, "stamp": time.time()}
+        _render_click(pid, p, "stems")
+        if p.get("render"):
+            _render_click(pid, p, "render")
+        save_project(p)
+        return jsonify(p["clicker"])
+
+
+@app.delete("/projects/<pid>/clicker")
+def remove_clicker(pid):
+    with NOTE_LOCKS.setdefault(pid, threading.Lock()):
+        p = load_project(pid)
+        p.pop("clicker", None)
+        save_project(p)
+        shutil.rmtree(os.path.join(pdir(pid), "click"), ignore_errors=True)
+    return jsonify(ok=True)
 
 
 def main():

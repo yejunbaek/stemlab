@@ -476,11 +476,27 @@ def export(project_dir, project, req, progress_cb):
         os.remove(tmp)
         written.append(out_path)
     else:
-        for i, s in enumerate(stems):
+        # each part is its own file: make them side by side
+        targets = []
+        for s in stems:
             out = _unique(os.path.join(dest, f"{base}{suffix} - {s}.{fmt}"))
-            audio_io.encode(paths.get(s) or os.path.join(folder, s + ".wav"), out, fmt)
-            written.append(out)
-            progress_cb((i + 1) / len(stems), f"Saved {s}")
+            while out in [o for _, o in targets]:
+                out = out.replace(f".{fmt}", f" ({len(targets) + 2}).{fmt}")
+            targets.append((paths.get(s) or os.path.join(folder, s + ".wav"), out))
+        done = [0]
+        lock = threading.Lock()
+
+        def one(job):
+            src, out = job
+            audio_io.encode(src, out, fmt)
+            with lock:
+                done[0] += 1
+                progress_cb(done[0] / len(targets), f"Saved {done[0]} of {len(targets)}")
+            return out
+
+        workers = 1 if fmt == "wav" else max(1, min(len(targets), (os.cpu_count() or 2) - 1))
+        with ThreadPoolExecutor(workers) as ex:
+            written.extend(ex.map(one, targets))
     return {"files": written, "folder": dest}
 
 

@@ -36,11 +36,14 @@ function fmtTime(s) {
 }
 const SYNTH_COLORS = ['#ef7fb4', '#4fc9b8', '#f0a04b', '#9fb3ff'];
 const isSynth = (s) => /^synth\d+$/.test(s);
+const CLICK_COLOR = '#7fd1e8';
 function color(stem) {
+  if (stem === 'click') return CLICK_COLOR;
   if (isSynth(stem)) return SYNTH_COLORS[(parseInt(stem.slice(5), 10) - 1) % SYNTH_COLORS.length];
   return getComputedStyle(document.documentElement).getPropertyValue('--' + stem).trim() || '#c8c0b2';
 }
 function stemLabel(s) {
+  if (s === 'click') return 'Clicker';
   if (isSynth(s)) {
     const sy = state.current && state.current.synths && state.current.synths[s];
     return sy ? sy.name : 'Synth';
@@ -48,7 +51,7 @@ function stemLabel(s) {
   return STEM_LABEL[s] || s[0].toUpperCase() + s.slice(1);
 }
 // every playable part: the split instruments plus any synth parts
-function parts(p) { return [...p.stems, ...Object.keys(p.synths || {})]; }
+function parts(p) { return [...p.stems, ...Object.keys(p.synths || {}), ...(p.clicker ? ['click'] : [])]; }
 
 let toastTimer = null;
 function toast(msg, action) {
@@ -85,6 +88,7 @@ function noteEdited(p, stem, version = state.version) {
   return !!(ne && ne.active && ne.base === version);
 }
 function stemUrl(p, stem) {
+  if (stem === 'click') return audioUrl(p.id, 'click', state.version) + '&v=' + ((p.clicker || {}).stamp || 0);
   if (isSynth(stem)) return audioUrl(p.id, 'synth', stem) + '&v=' + ((p.synths[stem] || {}).stamp || 0);
   if (noteEdited(p, stem)) return audioUrl(p.id, 'notes', stem) + '&v=' + (p.note_edits[stem].stamp || 0);
   return audioUrl(p.id, state.version, stem);
@@ -251,13 +255,13 @@ function renderList() {
     if (open) {
       const list = document.createElement('div');
       list.className = 'part-list';
-      const all = [...(p.stems || []), ...(p.synths || []).map((x) => x.id)];
+      const all = [...(p.stems || []), ...(p.synths || []).map((x) => x.id), ...(p.clicker ? ['click'] : [])];
       for (const part of all) {
         const pb = document.createElement('button');
         pb.className = 'part-item';
         pb.style.setProperty('--c', color(part));
         const syn = (p.synths || []).find((x) => x.id === part);
-        pb.textContent = syn ? syn.name : (STEM_LABEL[part] || part);
+        pb.textContent = syn ? syn.name : part === 'click' ? 'Clicker' : (STEM_LABEL[part] || part);
         pb.setAttribute('aria-current', String(isCur && state.focus === part));
         pb.onclick = () => openPart(p.id, part);
         list.append(pb);
@@ -317,7 +321,7 @@ function paintFocus() {
       $('#focusHear').textContent = state.focusHearAll ? 'Hear only this part' : 'Hear the whole song';
     }
   }
-  $('.add-row') && ($('.add-row').hidden = !!f);
+  $('.add-row') && ($('.add-row').hidden = !!f || !!(state.current && state.current.clicker));
   applyMix();
   requestAnimationFrame(drawWaveImages);
 }
@@ -774,6 +778,32 @@ function buildLanes(p) {
     vol.oninput = () => { mix[s].vol = +vol.value; applyMix(); };
     vol.ondblclick = () => { vol.value = 1; mix[s].vol = 1; applyMix(); };
     const nb = $('.n', lane);
+    if (s === 'click') {
+      nb.remove();
+      lane.classList.add('synth-lane');
+      const sub = document.createElement('div');
+      sub.className = 'lane-sub';
+      $('.lane-name', lane).append(sub);
+      const meter = document.createElement('button');
+      meter.className = 'sub-btn';
+      const shift = document.createElement('button');
+      shift.className = 'sub-btn';
+      shift.textContent = 'move 1';
+      shift.title = 'The loud click marks beat 1 of each bar. If it lands in the wrong spot, move it to the next beat.';
+      const BARS = [4, 3, 6, 2];
+      meter.textContent = `${p.clicker.per_bar} per bar`;
+      meter.title = 'Change how many beats are in a bar';
+      meter.onclick = () => updateClicker({ per_bar: BARS[(BARS.indexOf(p.clicker.per_bar) + 1) % BARS.length] });
+      shift.onclick = () => updateClicker({ offset: (p.clicker.offset + 1) % p.clicker.per_bar });
+      sub.append(meter, shift);
+      const del = document.createElement('button');
+      del.className = 'x';
+      del.title = 'Remove the clicker';
+      del.setAttribute('aria-label', 'Remove the clicker');
+      del.textContent = '×';
+      del.onclick = removeClicker;
+      $('.ms', lane).append(del);
+    }
     if (s === 'drums') nb.remove();
     else nb.onclick = () => openNotes(s);
     if (isSynth(s)) {
@@ -797,9 +827,10 @@ function buildLanes(p) {
   }
   const add = document.createElement('div');
   add.className = 'add-row';
-  add.innerHTML = '<button class="btn small" id="addSynthBtn">Add a synth part</button><span class="muted small">Play your own notes with a synth sound, or copy a melody from another part.</span>';
+  add.innerHTML = '<button class="btn small" id="addClickerBtn">Add clicker</button><span class="muted small">A metronome click on every beat of the song, louder on the first beat of each bar.</span>';
+  add.hidden = !!p.clicker;
   wrap.append(add);
-  $('#addSynthBtn').onclick = addSynth;
+  $('#addClickerBtn').onclick = addClicker;
   applyMix();
 }
 
@@ -1317,6 +1348,44 @@ async function addSynth() {
   } catch (e) { toast("Couldn't add a synth: " + e.message); }
 }
 
+async function addClicker() {
+  const p = state.current;
+  const btn = $('#addClickerBtn');
+  btn.disabled = true; btn.textContent = 'Adding…';
+  try {
+    p.clicker = await api(`/projects/${p.id}/clicker`, { method: 'POST', body: {} });
+    mixerFor(p);
+    buildLanes(p);
+    await player.replace('click', stemUrl(p, 'click'));
+    applyMix(); markNoteLanes(); paintFocus(); drawWaveImages();
+    refreshList();
+  } catch (e) {
+    toast("Couldn't add the clicker: " + e.message);
+    btn.disabled = false; btn.textContent = 'Add clicker';
+  }
+}
+
+async function updateClicker(change) {
+  const p = state.current;
+  try {
+    p.clicker = await api(`/projects/${p.id}/clicker`, { method: 'POST', body: { per_bar: p.clicker.per_bar, ...change } });
+    buildLanes(p);
+    await player.replace('click', stemUrl(p, 'click'));
+    applyMix(); markNoteLanes(); paintFocus(); drawWaveImages();
+  } catch (e) { toast(e.message); }
+}
+
+async function removeClicker() {
+  const p = state.current;
+  await api(`/projects/${p.id}/clicker`, { method: 'DELETE' }).catch(() => {});
+  delete p.clicker;
+  player.dropTrack('click');
+  if (player.playing) { player.pause(); player.play(); }
+  if (state.focus === 'click') state.focus = null;
+  buildLanes(p); applyMix(); markNoteLanes(); paintFocus(); drawWaveImages();
+  refreshList();
+}
+
 async function removeSynth(sid) {
   const p = state.current;
   const sy = p.synths[sid];
@@ -1367,7 +1436,7 @@ $('#exportBtn').onclick = () => {
     l.innerHTML = '<input type="checkbox"><span></span>';
     $('span', l).textContent = STEM_SHORT[s] || stemLabel(s);
     $('input', l).value = s;
-    const quiet = lanes[s] && lanes[s].el.classList.contains('empty-part');
+    const quiet = (lanes[s] && lanes[s].el.classList.contains('empty-part')) || s === 'click';
     $('input', l).checked = anySolo ? mix[s].solo : (!mix[s].mute && !quiet);
     box.append(l);
   });
