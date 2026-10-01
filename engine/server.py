@@ -18,6 +18,7 @@ import synth as synth_mod  # noqa: E402
 import chords as chords_mod  # noqa: E402
 import lyrics as lyrics_mod  # noqa: E402
 import clicker as clicker_mod  # noqa: E402
+import audio_io  # noqa: E402
 import processing  # noqa: E402
 import sources  # noqa: E402
 
@@ -251,7 +252,7 @@ def render(pid):
                 cleared.append(stem)
                 del p["note_edits"][stem]
                 try:
-                    os.remove(os.path.join(d, "notes", stem + ".wav"))
+                    audio_io.remove(os.path.join(d, "notes", stem + ".wav"))
                 except OSError:
                     pass
         save_project(p)
@@ -270,18 +271,18 @@ def export(pid):
     d = pdir(pid)
     version = req.get("version", "render")
     req["_extra"] = list((p.get("synths") or {}).keys())
-    req["_paths"] = {sid: os.path.join(d, "synth", sid + ".wav") for sid in req["_extra"]}
+    req["_paths"] = {sid: audio_io.current(os.path.join(d, "synth", sid + ".wav")) for sid in req["_extra"]}
     if p.get("clicker"):
         which = "render" if version == "render" and p.get("render") else "stems"
         cpath = os.path.join(d, "click", which + ".wav")
         if not os.path.isfile(cpath):
             _render_click(pid, p, which)
         req["_extra"].append("click")
-        req["_paths"]["click"] = cpath
-    req["_paths"].update({stem: os.path.join(d, "notes", stem + ".wav")
+        req["_paths"]["click"] = audio_io.current(cpath)
+    req["_paths"].update({stem: audio_io.current(os.path.join(d, "notes", stem + ".wav"))
                      for stem, ne in (p.get("note_edits") or {}).items()
                      if ne.get("active") and ne.get("base") == version
-                     and os.path.isfile(os.path.join(d, "notes", stem + ".wav"))})
+                     and os.path.isfile(audio_io.current(os.path.join(d, "notes", stem + ".wav")))})
     def work(progress):
         try:
             return processing.export(d, p, req, progress)
@@ -325,6 +326,7 @@ def audio_path(pid, version, name):
         path = os.path.join(d, version, stem + ".wav")
     else:
         abort(404)
+    path = audio_io.current(path)
     if not os.path.isfile(path):
         abort(404)
     return path
@@ -392,7 +394,7 @@ def detect_notes(pid, stem):
     if base not in ("stems", "render") or (base == "render" and not p.get("render")):
         base = "stems"
     d = pdir(pid)
-    path = os.path.join(d, base, stem + ".wav")
+    path = audio_io.current(os.path.join(d, base, stem + ".wav"))
 
     def work(progress):
         found = notes_mod.detect(path, stem, progress)
@@ -402,7 +404,7 @@ def detect_notes(pid, stem):
                                                     "active": False}
             save_project(q)
             try:
-                os.remove(os.path.join(d, "notes", stem + ".wav"))
+                audio_io.remove(os.path.join(d, "notes", stem + ".wav"))
             except OSError:
                 pass
         return {"count": len(found)}
@@ -438,9 +440,9 @@ def save_notes(pid, stem):
         edited = any(n.get("src") is not None or notes_mod._changed(n) for n in clean) or \
             len([n for n in clean if n.get("src") is None]) != len(ne["detected"])
         if edited:
-            notes_mod.render(os.path.join(d, ne["base"], stem + ".wav"), out, ne["detected"], clean)
-        elif os.path.isfile(out):
-            os.remove(out)
+            notes_mod.render(audio_io.current(os.path.join(d, ne["base"], stem + ".wav")), out, ne["detected"], clean)
+        else:
+            audio_io.remove(out)
         ne["active"] = edited
         ne["stamp"] = time.time()
         save_project(p)
@@ -455,7 +457,7 @@ def drop_notes(pid, stem):
         (p.get("note_edits") or {}).pop(stem, None)
         save_project(p)
         try:
-            os.remove(os.path.join(d, "notes", stem + ".wav"))
+            audio_io.remove(os.path.join(d, "notes", stem + ".wav"))
         except OSError:
             pass
     return jsonify(ok=True)
@@ -544,7 +546,7 @@ def delete_synth(pid, sid):
         (p.get("synths") or {}).pop(sid, None)
         save_project(p)
         try:
-            os.remove(os.path.join(pdir(pid), "synth", sid + ".wav"))
+            audio_io.remove(os.path.join(pdir(pid), "synth", sid + ".wav"))
         except OSError:
             pass
     return jsonify(ok=True)

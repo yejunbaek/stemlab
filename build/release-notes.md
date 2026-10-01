@@ -1,3 +1,2 @@
-- New: Clicker. Click Add clicker under the tracks for a metronome click on every beat of the song, louder on the first beat of each bar. It follows the song's real beat, including any tempo drift, and the Edited version's tempo too. Change the beats per bar, or move beat 1 if the loud click lands in the wrong spot.
-- Faster export: WAV files are now copied straight across (near instant), and MP3/FLAC files are made side by side.
-- Export progress now stays on screen until it's done, then shows where the files went with Show in folder. If something goes wrong, the message stays up with a Copy details button.
+- Fixed "engine error" on Windows when changing the clicker, editing notes or synths, or applying changes while that audio was loaded. Windows doesn't let a file be replaced while it's playing; Stemlab now saves the new version beside it and switches over.
+- The clicker is now a steady, straight beat at the song's tempo, from the very start of the song to the end. Its tempo is shown on the clicker track.

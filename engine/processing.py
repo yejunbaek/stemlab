@@ -438,7 +438,7 @@ def export(project_dir, project, req, progress_cb):
     if req.get("mode") == "mix":
         import soundfile as sf
         vols = req.get("volumes", {})
-        paths_in = [(paths.get(s) or os.path.join(folder, s + ".wav"), float(vols.get(s, 1.0))) for s in stems]
+        paths_in = [(paths.get(s) or audio_io.current(os.path.join(folder, s + ".wav")), float(vols.get(s, 1.0))) for s in stems]
         block = 44100 * 20
         # two passes over the parts in 20-second blocks: find the loudest point, then write,
         # so even long songs mix without loading everything into memory
@@ -482,7 +482,7 @@ def export(project_dir, project, req, progress_cb):
             out = _unique(os.path.join(dest, f"{base}{suffix} - {s}.{fmt}"))
             while out in [o for _, o in targets]:
                 out = out.replace(f".{fmt}", f" ({len(targets) + 2}).{fmt}")
-            targets.append((paths.get(s) or os.path.join(folder, s + ".wav"), out))
+            targets.append((paths.get(s) or audio_io.current(os.path.join(folder, s + ".wav")), out))
         done = [0]
         lock = threading.Lock()
 

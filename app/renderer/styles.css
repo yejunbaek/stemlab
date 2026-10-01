@@ -432,3 +432,4 @@ legend { font-weight: 600; margin-bottom: 4px; padding: 0; }
 .sub-btn:hover { color: var(--text); }
 
 .lane-name { min-width: 0; }
+.sub-bpm { margin-right: 10px; }

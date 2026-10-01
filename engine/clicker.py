@@ -35,12 +35,28 @@ def guess_downbeat(beats, drums_path, per_bar):
         return 0
 
 
+def steady_grid(beats, duration):
+    """A straight, unchanging beat for the whole song: the song's average tempo, lined up with
+    where its beats fall, running from the very start to the very end."""
+    b = np.asarray(beats, dtype=float)
+    k = np.arange(len(b))
+    period, phase = np.polyfit(k, b, 1)          # straight line through the detected beats
+    first = phase - np.ceil(phase / period) * period if phase > 0 else phase
+    while first < 0:
+        first += period
+    grid = np.arange(first, duration + 1e-9, period)
+    # which grid click lines up with the first detected beat (so bar accents stay right)
+    k0 = int(round((b[0] - first) / period))
+    return grid, k0, 60.0 / period
+
+
 def render(beats, duration, per_bar=4, offset=0):
     n = int((duration + 0.2) * SR)
     out = np.zeros(n, dtype=np.float32)
-    for i, b in enumerate(beats):
-        c = ACCENT if (i - offset) % per_bar == 0 else NORMAL
-        a = int(b * SR)
+    grid, k0, _ = steady_grid(beats, duration)
+    for i, t in enumerate(grid):
+        c = ACCENT if (i - k0 - offset) % per_bar == 0 else NORMAL
+        a = int(round(t * SR))
         e = min(n, a + len(c))
         if 0 <= a < n:
             out[a:e] += c[: e - a]

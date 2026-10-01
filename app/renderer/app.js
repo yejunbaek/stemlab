@@ -792,6 +792,8 @@ function buildLanes(p) {
       shift.title = 'The loud click marks beat 1 of each bar. If it lands in the wrong spot, move it to the next beat.';
       const BARS = [4, 3, 6, 2];
       meter.textContent = `${p.clicker.per_bar} per bar`;
+      const bpm = state.version === 'render' && p.render && p.render.bpm ? p.render.bpm : (p.analysis && p.analysis.bpm);
+      if (bpm) { const b = document.createElement('span'); b.className = 'sub-bpm'; b.textContent = `${Math.round(bpm)} BPM`; sub.append(b); }
       meter.title = 'Change how many beats are in a bar';
       meter.onclick = () => updateClicker({ per_bar: BARS[(BARS.indexOf(p.clicker.per_bar) + 1) % BARS.length] });
       shift.onclick = () => updateClicker({ offset: (p.clicker.offset + 1) % p.clicker.per_bar });
@@ -1120,6 +1122,7 @@ $$('#versionSeg button').forEach((b) => b.addEventListener('click', () => {
   if (b.disabled || state.version === b.dataset.version) return;
   closeNotes();
   state.version = b.dataset.version;
+  if (state.current && state.current.clicker) buildLanes(state.current);
   loadVersion();
 }));
 
