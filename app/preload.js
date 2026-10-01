@@ -10,6 +10,8 @@ contextBridge.exposeInMainWorld('stemlab', {
   pickAudio: () => ipcRenderer.invoke('dialog:openAudio'),
   pickFolder: () => ipcRenderer.invoke('dialog:openFolder'),
   showItem: (p) => ipcRenderer.invoke('shell:showItem', p),
+  openLogs: () => ipcRenderer.invoke('shell:openLogs'),
+  copyText: (t) => ipcRenderer.invoke('clipboard:write', t),
   pathForFile: (file) => webUtils.getPathForFile(file),
   appVersion: () => ipcRenderer.invoke('app:version'),
   updateState: () => ipcRenderer.invoke('update:state'),

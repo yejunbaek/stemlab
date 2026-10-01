@@ -14,6 +14,18 @@ const DATA_DIR = path.join(USER, 'data');
 const ENV_DIR = path.join(USER, 'engine-env');
 const ENV_PY = IS_WIN ? path.join(ENV_DIR, 'Scripts', 'python.exe') : path.join(ENV_DIR, 'bin', 'python');
 const MARKER = path.join(ENV_DIR, 'stemlab-setup.json');
+const LOG_DIR = path.join(USER, 'logs');
+const ENGINE_LOG = path.join(LOG_DIR, 'engine.log');
+
+function openEngineLog() {
+  fs.mkdirSync(LOG_DIR, { recursive: true });
+  try {
+    if (fs.existsSync(ENGINE_LOG) && fs.statSync(ENGINE_LOG).size > 5e6) fs.renameSync(ENGINE_LOG, ENGINE_LOG + '.old');
+  } catch { /* keep going without rotating */ }
+  const s = fs.createWriteStream(ENGINE_LOG, { flags: 'a' });
+  s.write(`\n==== Stemlab ${app.getVersion()} engine start ${new Date().toISOString()} ====\n`);
+  return s;
+}
 const TORCH = ['torch==2.5.1', 'torchaudio==2.5.1'];
 
 let win = null;
@@ -148,6 +160,9 @@ ipcMain.handle('engine:start', async () => {
   // yt-dlp runs YouTube's player code with this app's built-in Node.js
   engine = spawn(ENV_PY, args, { env: childEnv({ ELECTRON_RUN_AS_NODE: '1' }), windowsHide: true });
   const lines = [];
+  const logFile = openEngineLog();
+  engine.stdout.on('data', (b) => logFile.write(b));
+  engine.stderr.on('data', (b) => logFile.write(b));
   engineInfo = await new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('The audio engine took too long to start.\n' + lines.slice(-8).join('\n'))), 120000);
     const onData = (buf) => {
@@ -194,6 +209,8 @@ ipcMain.handle('dialog:openFolder', async () => {
 });
 
 ipcMain.handle('shell:showItem', (_e, p) => { shell.showItemInFolder(p); });
+ipcMain.handle('shell:openLogs', () => { fs.mkdirSync(LOG_DIR, { recursive: true }); return shell.openPath(LOG_DIR); });
+ipcMain.handle('clipboard:write', (_e, text) => { require('electron').clipboard.writeText(String(text)); });
 ipcMain.handle('shell:openPath', (_e, p) => shell.openPath(p));
 
 // ---------------------------------------------------------------- updates

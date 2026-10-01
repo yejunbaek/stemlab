@@ -1391,21 +1391,60 @@ $('#exportDialog').addEventListener('close', async () => {
     volumes: Object.fromEntries(stems.map((s) => [s, mix[s].vol])),
     dest_dir: dest,
   };
+  const panel = exportPanel();
+  panel.working(`Exporting ${stems.length === 1 || body.mode === 'mix' ? '1 file' : `${stems.length} files`}…`, 0);
   try {
     const r = await api(`/projects/${p.id}/export`, { method: 'POST', body });
-    toast('Exporting…');
     let j;
     do {
-      await new Promise((res) => setTimeout(res, 500));
+      await new Promise((res) => setTimeout(res, 400));
       j = await api('/jobs/' + r.job.id);
+      if (j.status === 'running') panel.working(`${j.stage || 'Exporting'}…`, j.progress);
     } while (j.status === 'running');
     if (j.status === 'error') throw new Error(j.error);
-    const n = j.result.files.length;
-    toast(`Exported ${n} file${n > 1 ? 's' : ''}`, { label: 'Show in folder', run: () => stemlab.showItem(j.result.files[0]) });
+    panel.done(j.result.files, j.result.folder);
   } catch (e) {
-    toast("Export didn't finish: " + e.message);
+    panel.failed(e.message, body);
   }
 });
+
+// a panel that stays until you close it, so a long export or an error can't slip by
+function exportPanel() {
+  let el = $('#exportPanel');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'exportPanel';
+    el.className = 'export-panel';
+    el.setAttribute('role', 'status');
+    document.body.append(el);
+  }
+  el.hidden = false;
+  const close = () => { el.hidden = true; };
+  const set = (html) => { el.innerHTML = html; const x = el.querySelector('[data-a=close]'); if (x) x.onclick = close; };
+  return {
+    working(msg, frac) {
+      set(`<div class="ep-row"><strong></strong></div><div class="bar"><i style="width:${Math.round((frac || 0) * 100)}%"></i></div>`);
+      el.querySelector('strong').textContent = msg;
+    },
+    done(files, folder) {
+      set(`<div class="ep-row"><strong></strong><button class="btn ghost small" data-a="close" aria-label="Close">Close</button></div>
+        <p class="muted small ep-path"></p><div class="row"><button class="btn primary small" data-a="show">Show in folder</button></div>`);
+      el.querySelector('strong').textContent = `Saved ${files.length} file${files.length > 1 ? 's' : ''}`;
+      el.querySelector('.ep-path').textContent = folder;
+      el.querySelector('[data-a=show]').onclick = () => stemlab.showItem(files[0]);
+    },
+    failed(msg, body) {
+      set(`<div class="ep-row"><strong>Export didn't finish</strong><button class="btn ghost small" data-a="close" aria-label="Close">Close</button></div>
+        <p class="error small ep-msg"></p><div class="row"><button class="btn small" data-a="copy">Copy details</button><button class="btn ghost small" data-a="logs">Open log folder</button></div>`);
+      el.querySelector('.ep-msg').textContent = msg;
+      el.querySelector('[data-a=copy]').onclick = () => {
+        stemlab.copyText(`Stemlab export error: ${msg}\nFolder: ${body.dest_dir}\nFormat: ${body.format}, ${body.mode}, ${body.version}, parts: ${body.stems.join(', ')}`);
+        toast('Copied');
+      };
+      el.querySelector('[data-a=logs]').onclick = () => stemlab.openLogs();
+    },
+  };
+}
 
 // ------------------------------------------------------------------ go
 

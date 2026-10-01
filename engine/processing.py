@@ -436,23 +436,45 @@ def export(project_dir, project, req, progress_cb):
     suffix = " (edited)" if version == "render" else ""
     written = []
     if req.get("mode") == "mix":
+        import soundfile as sf
         vols = req.get("volumes", {})
-        mix = None
-        for i, s in enumerate(stems):
-            a, sr = audio_io.read(paths.get(s) or os.path.join(folder, s + ".wav"))
-            a = a * float(vols.get(s, 1.0))
-            mix = a if mix is None else mix[:, : a.shape[1]] + a[:, : mix.shape[1]]
-            progress_cb(0.6 * (i + 1) / len(stems), "Mixing")
-        peak = float(np.max(np.abs(mix))) if mix is not None else 0
-        if peak > 0.99:
-            mix = mix * (0.99 / peak)
+        paths_in = [(paths.get(s) or os.path.join(folder, s + ".wav"), float(vols.get(s, 1.0))) for s in stems]
+        block = 44100 * 20
+        # two passes over the parts in 20-second blocks: find the loudest point, then write,
+        # so even long songs mix without loading everything into memory
+        def blocks():
+            files = [(sf.SoundFile(pth), v) for pth, v in paths_in]
+            try:
+                n = min(f.frames for f, _ in files)
+                done = 0
+                while done < n:
+                    k = min(block, n - done)
+                    acc = None
+                    for f, v in files:
+                        a = f.read(k, dtype="float32", always_2d=True) * v
+                        acc = a if acc is None else acc + a
+                    done += k
+                    yield acc, done / n
+            finally:
+                for f, _ in files:
+                    f.close()
+        peak = 0.0
+        for a, frac in blocks():
+            peak = max(peak, float(np.max(np.abs(a))) if a.size else 0.0)
+            progress_cb(0.45 * frac, "Mixing")
+        gain = 0.99 / peak if peak > 0.99 else 1.0
+        sr = 44100
         label = "mix" if set(project["stems"]) <= set(stems) else " + ".join(stems)
         tmp = os.path.join(project_dir, "_export_tmp.wav")
-        audio_io.write(tmp, mix.astype(np.float32), sr)
-        out = _unique(os.path.join(dest, f"{base}{suffix} - {label}.{fmt}"))
-        audio_io.encode(tmp, out, fmt)
+        with sf.SoundFile(tmp, "w", samplerate=sr, channels=2, subtype="PCM_16") as out:
+            for a, frac in blocks():
+                out.write(np.clip(a * gain, -1, 1))
+                progress_cb(0.45 + 0.45 * frac, "Mixing")
+        out_path = _unique(os.path.join(dest, f"{base}{suffix} - {label}.{fmt}"))
+        progress_cb(0.92, "Saving")
+        audio_io.encode(tmp, out_path, fmt)
         os.remove(tmp)
-        written.append(out)
+        written.append(out_path)
     else:
         for i, s in enumerate(stems):
             out = _unique(os.path.join(dest, f"{base}{suffix} - {s}.{fmt}"))

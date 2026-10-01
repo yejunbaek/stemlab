@@ -271,7 +271,18 @@ def export(pid):
                      for stem, ne in (p.get("note_edits") or {}).items()
                      if ne.get("active") and ne.get("base") == version
                      and os.path.isfile(os.path.join(d, "notes", stem + ".wav"))})
-    return jsonify(job=start_job("export", pid, lambda progress: processing.export(d, p, req, progress)))
+    def work(progress):
+        try:
+            return processing.export(d, p, req, progress)
+        except PermissionError as e:
+            raise RuntimeError(
+                f"Windows didn't allow saving to {req['dest_dir']}. Pick another folder, like Downloads. "
+                "If it keeps happening, Windows Security's ransomware protection may be blocking Stemlab.") from e
+        except OSError as e:
+            if getattr(e, "errno", None) == 28:
+                raise RuntimeError("There isn't enough free disk space for the export.") from e
+            raise
+    return jsonify(job=start_job("export", pid, work))
 
 
 @app.get("/jobs/<jid>")
