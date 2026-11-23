@@ -92,6 +92,8 @@ def refine(mix_path, stem_paths, out_paths, isolation=0.5, steady_s=0.4, progres
     import os
     import soundfile as sf
     names = list(stem_paths)
+    mix_path = audio_io.current(mix_path)
+    stem_paths = {n: audio_io.current(p) for n, p in stem_paths.items()}
     info = sf.info(mix_path)
     sr, N = info.samplerate, info.frames
     block = int(BLOCK_S * sr)

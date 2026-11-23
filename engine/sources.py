@@ -119,6 +119,7 @@ def fetch(kind, value, project_dir, progress_cb, js_runtime=None):
             raise SourceError("File not found: " + value)
         progress_cb(0.3)
         audio_io.to_wav(value, out)
+        audio_io.compress(out)
         name = os.path.splitext(os.path.basename(value))[0]
         artist = None
         if " - " in name:
@@ -138,6 +139,7 @@ def fetch(kind, value, project_dir, progress_cb, js_runtime=None):
             path, title, artist = download(url, tmp, progress_cb, js_runtime)
             src = {"type": "link", "url": url}
         audio_io.to_wav(path, out)
+        audio_io.compress(out)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     return {"title": title, "artist": artist, "source": src}

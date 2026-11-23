@@ -174,7 +174,7 @@ def fit_grid(beats):
 
 def _load_mono(path, sr=22050):
     import librosa
-    y, _ = librosa.load(path, sr=sr, mono=True)
+    y, _ = librosa.load(audio_io.current(path), sr=sr, mono=True)
     return y
 
 
@@ -479,7 +479,7 @@ def export(project_dir, project, req, progress_cb):
         # two passes over the parts in 20-second blocks: find the loudest point, then write,
         # so even long songs mix without loading everything into memory
         def blocks():
-            files = [(sf.SoundFile(pth), v) for pth, v in paths_in]
+            files = [(sf.SoundFile(audio_io.current(pth)), v) for pth, v in paths_in]
             try:
                 n = min(f.frames for f, _ in files)
                 done = 0

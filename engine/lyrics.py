@@ -8,7 +8,8 @@ MODEL = "small"
 
 def transcribe(vocals_path, model_dir, progress_cb):
     import librosa
-    y, sr = librosa.load(vocals_path, sr=16000, mono=True)
+    import audio_io
+    y, sr = librosa.load(audio_io.current(vocals_path), sr=16000, mono=True)
     if len(y) == 0 or float(np.sqrt(np.mean(y ** 2))) < 0.004:
         return {"lines": [], "note": "This song doesn't seem to have vocals."}
     from faster_whisper import WhisperModel

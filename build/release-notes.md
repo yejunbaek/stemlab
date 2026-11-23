@@ -1,4 +1,2 @@
-- Cleaner parts. A new best-quality splitter (BS-RoFormer-SW) keeps far less of the other instruments in each part and is much better at guitar and piano. It's slower: without an NVIDIA graphics card a song takes roughly 2 to 4 times its length to split. Choose Best or Fast when you add a song. The first time downloads about 700 MB.
-- Every split is now cleaned up afterwards: parts keep the recording's own detail (crisper), drums, bass rumble and the echo of other instruments are reduced, and a held note no longer flickers between guitar and piano.
-- New Parts button on each song: split it again with the better splitter, choose how much background to remove (Light, Medium, Strong), and split the guitar into two guitars (left and right, or lead and rhythm). Experimental, and you can join them back.
-- After this update Stemlab installs the new splitter once (a few minutes).
+- Songs take about a third of the space. Parts are now stored as FLAC, which is lossless: the sound is bit-for-bit the same as before, just smaller.
+- Songs you already have are converted automatically in the background after the update. Every file is checked before the old copy is removed.

@@ -207,7 +207,7 @@ def retry(pid):
     p = load_project(pid)
     d = pdir(pid)
     body = request.get_json(silent=True) or {}
-    if not os.path.isfile(os.path.join(d, "original.wav")):
+    if not audio_io.exists(os.path.join(d, "original.wav")):
         return jsonify(error="The original audio is missing; import the song again."), 400
     prev = p.get("split") or {}
     quality = body.get("quality", prev.get("quality", "best"))
@@ -262,7 +262,8 @@ def cleanup(pid):
                 # songs split before clean-up existed: their parts are the splitter's raw output
                 os.makedirs(raw, exist_ok=True)
                 for n in base:
-                    shutil.copyfile(audio_io.current(os.path.join(d, "stems", n + ".wav")), os.path.join(raw, n + ".wav"))
+                    src = audio_io.current(os.path.join(d, "stems", n + ".wav"))
+                    shutil.copyfile(src, os.path.join(raw, n + os.path.splitext(src)[1]))
             processing.clean_up(os.path.join(d, "original.wav"), raw, os.path.join(d, "stems"), base, isolation,
                                 lambda f, s=None: progress(0.6 * f, s))
         with NOTE_LOCKS.setdefault(pid, threading.Lock()):
@@ -384,7 +385,7 @@ def export(pid):
     if p.get("clicker"):
         which = "render" if version == "render" and p.get("render") else "stems"
         cpath = os.path.join(d, "click", which + ".wav")
-        if not os.path.isfile(cpath):
+        if not audio_io.exists(cpath):
             _render_click(pid, p, which)
         req["_extra"].append("click")
         req["_paths"]["click"] = audio_io.current(cpath)
@@ -454,7 +455,8 @@ def audio_path(pid, version, name):
 
 @app.get("/projects/<pid>/audio/<version>/<name>")
 def audio(pid, version, name):
-    return send_file(audio_path(pid, version, name), mimetype="audio/wav", conditional=True)
+    path = audio_path(pid, version, name)
+    return send_file(path, mimetype="audio/flac" if path.endswith(".flac") else "audio/wav", conditional=True)
 
 
 PEAK_RATE = 100
@@ -756,7 +758,7 @@ def _run_extra(pid, task):
         loads = {}
         for s in p["stems"]:
             if s != "drums":
-                loads[s], _ = librosa.load(os.path.join(d, "stems", s + ".wav"), sr=sr, mono=True)
+                loads[s], _ = librosa.load(audio_io.current(os.path.join(d, "stems", s + ".wav")), sr=sr, mono=True)
         beats = (p.get("analysis") or {}).get("beats") or []
         key = (p.get("analysis") or {}).get("key")
         harm = [loads[s] for s in loads if s not in ("vocals",)] or list(loads.values())
@@ -946,7 +948,7 @@ def set_clicker(pid):
             offset = ck.get("offset", 0)
         else:
             drums = os.path.join(pdir(pid), "stems", "drums.wav")
-            offset = clicker_mod.guess_downbeat(beats, drums if os.path.isfile(drums) else None, per_bar)
+            offset = clicker_mod.guess_downbeat(beats, drums if audio_io.exists(drums) else None, per_bar)
         p["clicker"] = {"per_bar": per_bar, "offset": offset, "stamp": time.time(), "style": CLICK_STYLE}
         _render_click(pid, p, "stems")
         if p.get("render"):
@@ -1023,6 +1025,47 @@ def join_guitars(pid):
     return jsonify(job=start_job("guitars", pid, work))
 
 
+# --------------------------------------------------------------------------- shrink stored audio
+# Songs from before 1.5.1 were stored as WAV. Convert them to FLAC (identical samples, about a
+# third of the size) quietly in the background, one file at a time.
+
+AUDIO_DIRS = ("", "stems", "stems_raw", "render", "notes", "synth", "click")
+
+
+def _compress_worker():
+    freed = 0
+    time.sleep(5)   # let the app settle first
+    for pid in sorted(os.listdir(projects_dir()), reverse=True):
+        d = os.path.join(projects_dir(), pid)
+        if not os.path.isfile(os.path.join(d, "project.json")):
+            continue
+        for sub in AUDIO_DIRS:
+            folder = os.path.join(d, sub)
+            if not os.path.isdir(folder):
+                continue
+            for f in sorted(os.listdir(folder)):
+                if not f.endswith(".wav") or ".tmp." in f or f.startswith("_"):
+                    continue
+                path = os.path.join(folder, f)
+                try:
+                    with HEAVY_LOCK, NOTE_LOCKS.setdefault(pid, threading.Lock()):
+                        if not os.path.isfile(path):
+                            continue
+                        size = os.path.getsize(path)
+                        newest = audio_io.current(path)
+                        if newest != path and newest.endswith(".flac"):
+                            # a newer FLAC copy exists: this WAV is left over
+                            os.remove(path)
+                            freed += size
+                        elif audio_io.compress(path):
+                            freed += size - os.path.getsize(audio_io.current(path))
+                except Exception as e:  # in use, disk full...: try again next time
+                    log(f"couldn't shrink {path}: {e}")
+                time.sleep(0.05)
+    if freed:
+        log(f"Stored audio shrunk by {freed / 1e9:.2f} GB")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, required=True)
@@ -1045,6 +1088,7 @@ def main():
         except Exception:
             pass
     threading.Thread(target=_extras_worker, daemon=True).start()
+    threading.Thread(target=_compress_worker, daemon=True).start()
     for pid in sorted(os.listdir(projects_dir()), reverse=True):
         if os.path.isfile(os.path.join(projects_dir(), pid, "project.json")):
             queue_extras(pid)

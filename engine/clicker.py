@@ -23,7 +23,8 @@ def guess_downbeat(beats, drums_path, per_bar):
         return 0
     try:
         import librosa
-        y, sr = librosa.load(drums_path, sr=11025, mono=True)
+        import audio_io
+        y, sr = librosa.load(audio_io.current(drums_path), sr=11025, mono=True)
         from scipy.signal import butter, sosfilt
         low = np.abs(sosfilt(butter(4, 150, btype="low", fs=sr, output="sos"), y))
         w = int(0.05 * sr)

@@ -24,7 +24,7 @@ HOP = 256
 
 def detect(path, stem, progress_cb):
     import librosa
-    y, _ = librosa.load(path, sr=SR, mono=True)
+    y, _ = librosa.load(audio_io.current(path), sr=SR, mono=True)
     fmin, fmax = RANGES.get("guitar" if stem.startswith("guitar") else stem, (50.0, 1600.0))
     chunk = HOP * 2000  # ~23 s per chunk keeps memory flat and gives progress
     f0_parts, voiced_parts = [], []
