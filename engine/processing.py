@@ -14,7 +14,7 @@ NOTE_NAMES = ["C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"]
 
 # --------------------------------------------------------------------------- separation
 
-def separate(mix_path, stems_dir, progress_cb, log=print):
+def _separate_demucs(mix_path, stems_dir, progress_cb, log=print):
     import torch
     import demucs.apply as dapply
     from demucs.apply import BagOfModels, apply_model
@@ -75,6 +75,41 @@ def separate(mix_path, stems_dir, progress_cb, log=print):
         audio_io.write(os.path.join(stems_dir, name + ".wav"), src.astype(np.float32), sr)
         names.append(name)
     return [n for n in STEM_ORDER if n in names] + [n for n in names if n not in STEM_ORDER]
+
+
+ISOLATION = {"light": 0.2, "medium": 0.5, "strong": 1.0}
+
+
+def separate(mix_path, stems_dir, progress_cb, log=print, quality="best", isolation="medium"):
+    """Split the song, keep the splitter's raw parts in stems_raw/, then clean them up into
+    stems/. Returns (part names, info about how it was split)."""
+    import refine
+    import roformer
+    raw_dir = stems_dir.rstrip("/\\") + "_raw"
+    info = {"quality": quality, "isolation": isolation, "note": None}
+    split = lambda f, s=None: progress_cb(0.9 * f, s)
+    names = None
+    if quality == "best":
+        try:
+            names = roformer.separate(mix_path, raw_dir, split, log)
+        except Exception as e:  # no download, out of memory...: use the fast splitter instead
+            log(f"Best-quality splitter failed: {e!r}; using the fast splitter")
+            info["quality"] = "fast"
+            info["note"] = ("The best-quality splitter couldn't be used, so this song was split with the "
+                            f"fast one. ({str(e)[:200]})")
+    if names is None:
+        names = _separate_demucs(mix_path, raw_dir, split, log)
+    clean_up(mix_path, raw_dir, stems_dir, names, isolation, lambda f, s=None: progress_cb(0.9 + 0.1 * f, s))
+    order = [n for n in STEM_ORDER if n in names] + [n for n in names if n not in STEM_ORDER]
+    return order, info
+
+
+def clean_up(mix_path, raw_dir, stems_dir, names, isolation, progress_cb):
+    import refine
+    os.makedirs(stems_dir, exist_ok=True)
+    refine.refine(mix_path, {n: audio_io.current(os.path.join(raw_dir, n + ".wav")) for n in names},
+                  {n: os.path.join(stems_dir, n + ".wav") for n in names},
+                  isolation=ISOLATION.get(isolation, 0.5), steady_s=1.0, progress_cb=progress_cb)
 
 
 # --------------------------------------------------------------------------- analysis
@@ -433,6 +468,7 @@ def export(project_dir, project, req, progress_cb):
     if not stems:
         raise ValueError("Pick at least one part to export.")
     base = _safe(project.get("title") or "song")
+    labels = dict(req.get("_labels") or {})
     suffix = " (edited)" if version == "render" else ""
     written = []
     if req.get("mode") == "mix":
@@ -464,7 +500,7 @@ def export(project_dir, project, req, progress_cb):
             progress_cb(0.45 * frac, "Mixing")
         gain = 0.99 / peak if peak > 0.99 else 1.0
         sr = 44100
-        label = "mix" if set(project["stems"]) <= set(stems) else " + ".join(stems)
+        label = "mix" if set(project["stems"]) <= set(stems) else " + ".join(_safe(labels.get(s, s)) for s in stems)
         tmp = os.path.join(project_dir, "_export_tmp.wav")
         with sf.SoundFile(tmp, "w", samplerate=sr, channels=2, subtype="PCM_16") as out:
             for a, frac in blocks():
@@ -479,7 +515,7 @@ def export(project_dir, project, req, progress_cb):
         # each part is its own file: make them side by side
         targets = []
         for s in stems:
-            out = _unique(os.path.join(dest, f"{base}{suffix} - {s}.{fmt}"))
+            out = _unique(os.path.join(dest, f"{base}{suffix} - {_safe(labels.get(s, s))}.{fmt}"))
             while out in [o for _, o in targets]:
                 out = out.replace(f".{fmt}", f" ({len(targets) + 2}).{fmt}")
             targets.append((paths.get(s) or audio_io.current(os.path.join(folder, s + ".wav")), out))

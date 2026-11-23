@@ -39,11 +39,17 @@ const isSynth = (s) => /^synth\d+$/.test(s);
 const CLICK_COLOR = '#7fd1e8';
 function color(stem) {
   if (stem === 'click') return CLICK_COLOR;
+  if (stem === 'guitar1') return getComputedStyle(document.documentElement).getPropertyValue('--guitar').trim();
+  if (stem === 'guitar2') return '#f39a5e';
   if (isSynth(stem)) return SYNTH_COLORS[(parseInt(stem.slice(5), 10) - 1) % SYNTH_COLORS.length];
   return getComputedStyle(document.documentElement).getPropertyValue('--' + stem).trim() || '#c8c0b2';
 }
 function stemLabel(s) {
   if (s === 'click') return 'Clicker';
+  if (s === 'guitar1' || s === 'guitar2') {
+    const gs = state.current && state.current.guitar_split;
+    return gs && gs.names ? gs.names[s === 'guitar1' ? 0 : 1] : (s === 'guitar1' ? 'Guitar 1' : 'Guitar 2');
+  }
   if (isSynth(s)) {
     const sy = state.current && state.current.synths && state.current.synths[s];
     return sy ? sy.name : 'Synth';
@@ -261,7 +267,10 @@ function renderList() {
         pb.className = 'part-item';
         pb.style.setProperty('--c', color(part));
         const syn = (p.synths || []).find((x) => x.id === part);
-        pb.textContent = syn ? syn.name : part === 'click' ? 'Clicker' : (STEM_LABEL[part] || part);
+        const gs = p.guitar_split;
+        pb.textContent = syn ? syn.name : part === 'click' ? 'Clicker'
+          : (part === 'guitar1' || part === 'guitar2') ? (gs && gs.names ? gs.names[part === 'guitar1' ? 0 : 1] : part)
+            : (STEM_LABEL[part] || part);
         pb.setAttribute('aria-current', String(isCur && state.focus === part));
         pb.onclick = () => openPart(p.id, part);
         list.append(pb);
@@ -376,7 +385,20 @@ function openImport() {
 $('#newBtn').onclick = openImport;
 document.addEventListener('click', (e) => { if (e.target.closest('[data-action=new]')) openImport(); });
 
+function importQuality() {
+  const r = $('input[name=importQuality]:checked');
+  return r ? r.value : 'best';
+}
+try {
+  const q = localStorage.getItem('stemlab.quality');
+  if (q) $$('input[name=importQuality]').forEach((r) => { r.checked = r.value === q; });
+} catch { /* remembering the choice is optional */ }
+$$('input[name=importQuality]').forEach((r) => r.addEventListener('change', () => {
+  try { localStorage.setItem('stemlab.quality', importQuality()); } catch { /* optional */ }
+}));
+
 async function startImport(body) {
+  body = { ...body, quality: importQuality() };
   $('#importError').hidden = true;
   try {
     const r = await api('/projects', { method: 'POST', body });
@@ -477,6 +499,13 @@ async function openProject(pid, focus) {
     return;
   }
   showView('projectView');
+  if (p.split && p.split.note) {
+    state.splitNoteShown = state.splitNoteShown || new Set();
+    if (!state.splitNoteShown.has(p.id)) {
+      state.splitNoteShown.add(p.id);
+      toast('This song was split with the fast splitter, because the best-quality one could not be used. See Parts for details.');
+    }
+  }
   state.version = p.render ? 'render' : 'stems';
   buildEditor(p);
   buildLanes(p);
@@ -1417,6 +1446,90 @@ $$('#modeSeg button').forEach((b) => b.addEventListener('click', () => {
   openNotes(state.lastNoteStem && parts(p).includes(state.lastNoteStem) ? state.lastNoteStem
     : withNotes || (p.stems.includes('vocals') ? 'vocals' : p.stems.find((s) => s !== 'drums')));
 }));
+
+// ------------------------------------------------------------------ parts: splitter, clean-up, guitars
+
+function paintPartsDialog() {
+  const p = state.current;
+  const sp = p.split || { quality: 'fast', isolation: 'medium' };
+  $('#splitUsed').textContent = sp.quality === 'best'
+    ? 'This song was split with the best-quality splitter.'
+    : 'This song was split with the fast splitter.';
+  $('#splitNote').textContent = sp.note || '';
+  $('#splitNote').hidden = !sp.note;
+  $$('input[name=splitQuality]').forEach((r) => { r.checked = r.value === 'best'; });
+  const iso = sp.isolation || (p.split ? 'medium' : null);
+  $$('#isoSeg button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.iso === iso)));
+  const split = p.stems.includes('guitar1');
+  const hasGuitar = split || p.stems.includes('guitar');
+  $('#guitarSet').hidden = !hasGuitar;
+  if (split) {
+    const gs = p.guitar_split || {};
+    $('#guitarText').textContent = gs.method === 'sides'
+      ? 'The guitar is split into the guitar on the left and the guitar on the right.'
+      : 'The guitar is split into a lead guitar (single melody notes) and a rhythm guitar (chords). When both play the same note at once, it stays with the rhythm guitar.';
+    $('#guitarBtn').textContent = 'Join the guitars back into one';
+  } else {
+    $('#guitarText').textContent = 'If two guitars play, Stemlab can try to pull them apart: by side if one is on the left and one on the right, otherwise into lead and rhythm. Experimental.';
+    $('#guitarBtn').textContent = 'Split into two guitars';
+  }
+}
+
+$('#partsBtn').onclick = () => { paintPartsDialog(); $('#partsBusy').hidden = true; $('#partsDialog').showModal(); };
+
+async function partsJob(path, body, busyText) {
+  const p = state.current;
+  const busy = $('#partsBusy');
+  $$('#partsDialog button').forEach((b) => { b.disabled = true; });
+  busy.hidden = false;
+  busy.textContent = busyText;
+  try {
+    const r = await api(`/projects/${p.id}/${path}`, { method: 'POST', body });
+    let j;
+    do {
+      await new Promise((res) => setTimeout(res, 600));
+      j = await api('/jobs/' + r.job.id);
+      busy.textContent = `${j.stage || busyText} ${Math.round((j.progress || 0) * 100)}%`;
+    } while (j.status === 'running');
+    if (j.status === 'error') throw new Error(j.error);
+    player.stop();
+    closeNotes(true);
+    state.current = null;           // load the song again with its new parts
+    await openProject(p.id);
+    await refreshList();
+    paintPartsDialog();
+    busy.textContent = 'Done.';
+  } catch (e) {
+    busy.textContent = "That didn't finish: " + e.message;
+  } finally {
+    $$('#partsDialog button').forEach((b) => { b.disabled = false; });
+  }
+}
+
+$$('#isoSeg button').forEach((b) => b.addEventListener('click', () => {
+  if (b.getAttribute('aria-selected') === 'true') return;
+  partsJob('cleanup', { isolation: b.dataset.iso }, 'Cleaning up the parts…');
+}));
+
+$('#guitarBtn').onclick = () => {
+  const split = state.current.stems.includes('guitar1');
+  partsJob(split ? 'guitars/join' : 'guitars/split', {}, split ? 'Joining the guitars…' : 'Splitting the guitar…');
+};
+
+$('#resplitBtn').onclick = async () => {
+  const p = state.current;
+  const q = ($('input[name=splitQuality]:checked') || {}).value || 'best';
+  if (!confirm(`Split "${p.title}" again with the ${q === 'best' ? 'best-quality' : 'fast'} splitter? Note and chord edits will be lost. ${q === 'best' ? 'This can take a while.' : ''}`)) return;
+  $('#partsDialog').close();
+  try {
+    const r = await api(`/projects/${p.id}/retry`, { method: 'POST', body: { quality: q } });
+    state.jobs[p.id] = r.job;
+    player.stop();
+    state.current = null;
+    await refreshList();
+    openProject(p.id);
+  } catch (e) { toast(e.message); }
+};
 
 // ------------------------------------------------------------------ export
 

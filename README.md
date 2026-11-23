@@ -13,6 +13,8 @@ Everything runs on your computer. Songs and projects are kept in `%APPDATA%\Stem
 
 **Add a song**: drop in an audio or video file, paste a YouTube link, or paste a Spotify song link. Spotify audio is DRM-protected, so Stemlab reads the song's title and artist from the link and downloads the matching song from YouTube instead.
 
+**Splitting quality**: Best uses BS-RoFormer-SW (cleaner, much better guitar and piano, slower; about 700 MB, downloaded once). Fast uses Demucs htdemucs_6s. Either way each split is cleaned up afterwards: parts are rebuilt from the original recording, bleed and echo from other instruments are reduced, and held notes are kept in one part. The **Parts** button lets you split again, change how much background is removed, or split the guitar into two guitars.
+
 **Hear each part**: every part gets a lane with mute (M), solo (S) and volume. Ctrl-click S to solo more than one part. Drag across the bar ruler to loop a section.
 
 **Key**: transpose up or down 12 semitones, optionally correct the whole song to A440 tuning. Drums stay at their pitch by default.

@@ -7,3 +7,4 @@ imageio-ffmpeg>=0.5
 flask>=3.0
 numpy<2.3
 faster-whisper>=1.1
+bs-roformer-infer==0.1.5

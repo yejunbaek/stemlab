@@ -18,6 +18,7 @@ import synth as synth_mod  # noqa: E402
 import chords as chords_mod  # noqa: E402
 import lyrics as lyrics_mod  # noqa: E402
 import clicker as clicker_mod  # noqa: E402
+import guitars as guitars_mod  # noqa: E402
 import audio_io  # noqa: E402
 import processing  # noqa: E402
 import sources  # noqa: E402
@@ -136,6 +137,7 @@ def list_projects():
                 item = {k: p.get(k) for k in ("id", "title", "artist", "status", "created", "error", "stems")}
                 item["synths"] = [{"id": k, "name": v.get("name")} for k, v in (p.get("synths") or {}).items()]
                 item["clicker"] = bool(p.get("clicker"))
+                item["guitar_split"] = p.get("guitar_split")
                 out.append(item)
             except Exception:
                 pass
@@ -165,7 +167,7 @@ def create_project():
     d = os.path.join(projects_dir(), pid)
     os.makedirs(d)
     guess = os.path.splitext(os.path.basename(value))[0] if kind == "file" else "Fetching…"
-    p = {"id": pid, "title": guess, "artist": None, "created": time.time(),
+    p = {"id": pid, "title": guess, "artist": None, "created": time.time(), "split": None,
          "status": "importing", "error": None, "stems": [], "analysis": None, "render": None}
     save_project(p)
 
@@ -179,9 +181,12 @@ def create_project():
             progress(0.08, "Waiting for another song to finish")
             with HEAVY_LOCK:
                 progress(0.08, "Separating instruments")
-                stems = processing.separate(os.path.join(d, "original.wav"), os.path.join(d, "stems"),
-                                            lambda f, s=None: progress(0.08 + 0.82 * f, s), log)
+                stems, info = processing.separate(
+                    os.path.join(d, "original.wav"), os.path.join(d, "stems"),
+                    lambda f, s=None: progress(0.08 + 0.82 * f, s), log,
+                    quality=body.get("quality", "best"), isolation=body.get("isolation", "medium"))
             p["stems"] = stems
+            p["split"] = info
             set_status(p, "analyzing")
             progress(0.9, "Finding tempo and key")
             p["analysis"] = processing.analyze(d, stems)
@@ -198,27 +203,128 @@ def create_project():
 
 @app.post("/projects/<pid>/retry")
 def retry(pid):
+    """Split the song again (after an error, or with a different quality setting)."""
     p = load_project(pid)
     d = pdir(pid)
+    body = request.get_json(silent=True) or {}
     if not os.path.isfile(os.path.join(d, "original.wav")):
         return jsonify(error="The original audio is missing; import the song again."), 400
+    prev = p.get("split") or {}
+    quality = body.get("quality", prev.get("quality", "best"))
+    isolation = body.get("isolation", prev.get("isolation", "medium"))
+    was_ready = p.get("status") == "ready"
 
     def work(progress):
         try:
             set_status(p, "splitting")
+            progress(0.0, "Waiting for another song to finish")
             with HEAVY_LOCK:
-                p["stems"] = processing.separate(os.path.join(d, "original.wav"), os.path.join(d, "stems"),
-                                                 lambda f, s=None: progress(0.9 * f, s), log)
-            set_status(p, "analyzing")
+                stems, info = processing.separate(
+                    os.path.join(d, "original.wav"), os.path.join(d, "stems"),
+                    lambda f, s=None: progress(0.85 * f, s), log, quality=quality, isolation=isolation)
+            q = load_project(pid)
+            q["stems"], q["split"] = stems, info
+            q.pop("guitar_split", None)
+            _parts_changed(pid, q, d, progress, resplit=True)
+            q["status"], q["error"] = "analyzing", None
+            save_project(q)
             progress(0.9, "Finding tempo and key")
-            p["analysis"] = processing.analyze(d, p["stems"])
-            set_status(p, "ready")
+            if not was_ready or not q.get("analysis"):
+                q["analysis"] = processing.analyze(d, stems)
+            q["status"] = "ready"
+            save_project(q)
+            _reapply_edits(pid, d, progress)
             queue_extras(pid)
             return {"project": pid}
         except Exception as e:
-            set_status(p, "error", str(e))
+            set_status(load_project(pid), "error", str(e))
             raise
     return jsonify(job=start_job("import", pid, work))
+
+
+@app.post("/projects/<pid>/cleanup")
+def cleanup(pid):
+    """Redo the clean-up of the split parts with a different background-removal setting."""
+    p = load_project(pid)
+    d = pdir(pid)
+    body = request.get_json(silent=True) or {}
+    isolation = body.get("isolation", "medium")
+    if isolation not in processing.ISOLATION:
+        return jsonify(error="Unknown setting."), 400
+    raw = os.path.join(d, "stems_raw")
+    base = [s for s in p["stems"] if not s.startswith("guitar") or s == "guitar"]
+    if (p.get("guitar_split") or {}) and "guitar" not in base:
+        base.append("guitar")
+
+    def work(progress):
+        with HEAVY_LOCK:
+            if not os.path.isdir(raw):
+                # songs split before clean-up existed: their parts are the splitter's raw output
+                os.makedirs(raw, exist_ok=True)
+                for n in base:
+                    shutil.copyfile(audio_io.current(os.path.join(d, "stems", n + ".wav")), os.path.join(raw, n + ".wav"))
+            processing.clean_up(os.path.join(d, "original.wav"), raw, os.path.join(d, "stems"), base, isolation,
+                                lambda f, s=None: progress(0.6 * f, s))
+        with NOTE_LOCKS.setdefault(pid, threading.Lock()):
+            q = load_project(pid)
+            q["split"] = {**(q.get("split") or {"quality": "fast"}), "isolation": isolation, "note": None}
+            _parts_changed(pid, q, d, progress, resplit=False)
+            save_project(q)
+        _reapply_edits(pid, d, progress)
+        return {"project": pid}
+    return jsonify(job=start_job("cleanup", pid, work))
+
+
+def _parts_changed(pid, p, d, progress, resplit):
+    """The split parts were rebuilt: keep everything that depends on them in step."""
+    if resplit:
+        # notes and chords were found in the old parts: find them again
+        for k in ("note_edits",):
+            p.pop(k, None)
+        sheet = p.get("sheet") or {}
+        sheet.pop("chords", None)
+        sheet.pop("chord_source", None)
+        ex = p.get("extras") or {}
+        ex.pop("notes", None)
+        ex.pop("chords", None)
+        shutil.rmtree(os.path.join(d, "notes"), ignore_errors=True)
+    else:
+        # note edits on the original parts: rebuild their audio from the cleaned part
+        for stem, ne in list((p.get("note_edits") or {}).items()):
+            if ne.get("active") and ne.get("base") == "stems":
+                try:
+                    notes_mod.render(audio_io.current(os.path.join(d, "stems", stem + ".wav")),
+                                     os.path.join(d, "notes", stem + ".wav"), ne["detected"], ne["notes"])
+                    ne["stamp"] = time.time()
+                except Exception:
+                    traceback.print_exc()
+    # a guitar that was split in two: split the new guitar the same way
+    gs = p.get("guitar_split")
+    if gs:
+        info = guitars_mod.split(audio_io.current(os.path.join(d, "stems", "guitar.wav")),
+                                 os.path.join(d, "stems", "guitar1.wav"), os.path.join(d, "stems", "guitar2.wav"),
+                                 method=gs.get("method"))
+        p["guitar_split"] = info
+    p["parts_stamp"] = time.time()
+
+
+def _reapply_edits(pid, d, progress):
+    """If the song has an Edited version, make it again from the new parts with the same settings."""
+    p = load_project(pid)
+    if not p.get("render"):
+        return
+    progress(0.92, "Re-applying your key and tempo changes")
+    with HEAVY_LOCK:
+        info = processing.render(d, p, p["render"]["settings"], lambda f, s=None: progress(0.92 + 0.08 * f, s))
+    with NOTE_LOCKS.setdefault(pid, threading.Lock()):
+        q = load_project(pid)
+        q["render"] = info
+        for stem, ne in list((q.get("note_edits") or {}).items()):
+            if ne.get("base") == "render":
+                del q["note_edits"][stem]
+        if q.get("clicker"):
+            _render_click(pid, q, "render")
+        save_project(q)
 
 
 @app.patch("/projects/<pid>")
@@ -270,6 +376,9 @@ def export(pid):
         req["version"] = "stems"
     d = pdir(pid)
     version = req.get("version", "render")
+    gs = p.get("guitar_split") or {}
+    if gs.get("names"):
+        req["_labels"] = {"guitar1": gs["names"][0], "guitar2": gs["names"][1]}
     req["_extra"] = list((p.get("synths") or {}).keys())
     req["_paths"] = {sid: audio_io.current(os.path.join(d, "synth", sid + ".wav")) for sid in req["_extra"]}
     if p.get("clicker"):
@@ -854,6 +963,64 @@ def remove_clicker(pid):
         save_project(p)
         shutil.rmtree(os.path.join(pdir(pid), "click"), ignore_errors=True)
     return jsonify(ok=True)
+
+
+# --------------------------------------------------------------------------- two guitars
+
+@app.post("/projects/<pid>/guitars/split")
+def split_guitars(pid):
+    p = load_project(pid)
+    d = pdir(pid)
+    if "guitar" not in p.get("stems", []):
+        return jsonify(error="This song's guitar is already split."), 400
+    method = (request.get_json(silent=True) or {}).get("method")
+
+    def work(progress):
+        with HEAVY_LOCK:
+            info = guitars_mod.split(audio_io.current(os.path.join(d, "stems", "guitar.wav")),
+                                     os.path.join(d, "stems", "guitar1.wav"), os.path.join(d, "stems", "guitar2.wav"),
+                                     lambda f, s=None: progress(0.7 * f, s), method=method)
+        with NOTE_LOCKS.setdefault(pid, threading.Lock()):
+            q = load_project(pid)
+            i = q["stems"].index("guitar")
+            q["stems"][i:i + 1] = ["guitar1", "guitar2"]
+            q["guitar_split"] = info
+            (q.get("note_edits") or {}).pop("guitar", None)
+            ((q.get("extras") or {}).get("notes") or {}).pop("guitar", None)
+            q["parts_stamp"] = time.time()
+            save_project(q)
+        _reapply_edits(pid, d, progress)
+        queue_extras(pid)
+        return info
+    return jsonify(job=start_job("guitars", pid, work))
+
+
+@app.post("/projects/<pid>/guitars/join")
+def join_guitars(pid):
+    d = pdir(pid)
+
+    def work(progress):
+        with NOTE_LOCKS.setdefault(pid, threading.Lock()):
+            q = load_project(pid)
+            if "guitar1" not in q.get("stems", []):
+                return {}
+            i = q["stems"].index("guitar1")
+            q["stems"] = [s for s in q["stems"] if s not in ("guitar1", "guitar2")]
+            q["stems"].insert(i, "guitar")
+            q.pop("guitar_split", None)
+            for s in ("guitar1", "guitar2"):
+                (q.get("note_edits") or {}).pop(s, None)
+                ((q.get("extras") or {}).get("notes") or {}).pop(s, None)
+                ((q.get("sheet") or {}).get("chords") or {}).pop(s, None)
+                ((q.get("sheet") or {}).get("chord_source") or {}).pop(s, None)
+                for folder in ("stems", "render", "notes"):
+                    audio_io.remove(os.path.join(d, folder, s + ".wav"))
+            q["parts_stamp"] = time.time()
+            save_project(q)
+        _reapply_edits(pid, d, progress)
+        queue_extras(pid)
+        return {}
+    return jsonify(job=start_job("guitars", pid, work))
 
 
 def main():

@@ -66,6 +66,7 @@ function childEnv(extra = {}) {
     PYTHONIOENCODING: 'utf-8',
     PIP_DISABLE_PIP_VERSION_CHECK: '1',
     TORCH_HOME: path.join(DATA_DIR, 'models'),
+    STEMLAB_DATA: DATA_DIR,
     ...extra,
   };
 }
@@ -115,16 +116,24 @@ ipcMain.handle('setup:run', async (_e, { gpu }) => {
     steps.push([gpu ? 'Downloading the AI engine (GPU version)' : 'Downloading the AI engine', 45, ENV_PY, torchArgs]);
   }
   steps.push(['Installing audio tools', 30, ENV_PY, ['-m', 'pip', 'install', '-r', path.join(ENGINE_DIR, 'requirements.txt')]]);
-  steps.push(['Downloading the instrument-splitting model', 19, ENV_PY,
+  steps.push(['Downloading the instrument-splitting model', 6, ENV_PY,
     ['-c', "from demucs.pretrained import get_model; get_model('htdemucs_6s'); print('model ready')"]]);
+  // optional: if this download fails, songs are split with the fast splitter until it works
+  steps.push(['Downloading the best-quality splitter (about 700 MB)', 13, ENV_PY,
+    ['-c', `import sys; sys.path.insert(0, ${JSON.stringify(ENGINE_DIR)}); import roformer; roformer.ensure_assets(); print('best-quality splitter ready')`], true]);
 
   const total = steps.reduce((a, s) => a + s[1], 0);
   let done = 0;
   fs.mkdirSync(DATA_DIR, { recursive: true });
-  for (const [label, weight, cmd, args] of steps) {
+  for (const [label, weight, cmd, args, optional] of steps) {
     send('setup:progress', { label, fraction: done / total });
     log(`— ${label}`);
-    await run(cmd, args, log);
+    try {
+      await run(cmd, args, log);
+    } catch (e) {
+      if (!optional) throw e;
+      log(`(skipped: ${String(e.message || e).split('\n').pop()}. Stemlab will use the fast splitter and try again later.)`);
+    }
     done += weight;
   }
   fs.writeFileSync(MARKER, JSON.stringify({ reqHash: reqHash(), gpu: !!gpu, at: Date.now(), ytdlpChecked: Date.now() }));

@@ -73,6 +73,11 @@
           <input id="urlInput" type="url" placeholder="Or paste a YouTube or Spotify song link" autocomplete="off" spellcheck="false">
           <button class="btn primary" type="submit">Split song</button>
         </form>
+        <fieldset class="quality">
+          <legend>Splitting quality</legend>
+          <label class="check small"><input type="radio" name="importQuality" value="best" checked><span>Best<small>Cleaner parts with less of the other instruments in them. Slower: about 2 to 4 times the song's length without an NVIDIA graphics card. The first time downloads about 700 MB.</small></span></label>
+          <label class="check small"><input type="radio" name="importQuality" value="fast"><span>Fast<small>The quicker splitter Stemlab used before. More background from other instruments.</small></span></label>
+        </fieldset>
         <p class="note">Spotify songs are protected, so Stemlab reads the song's name from the link and finds the same song on YouTube. Only use songs you're allowed to download.</p>
         <p id="importError" class="error" hidden></p>
       </div>
@@ -121,6 +126,7 @@
             <button data-version="stems" role="tab">Original</button>
             <button data-version="render" role="tab">Edited</button>
           </div>
+          <button class="btn" id="partsBtn">Parts</button>
           <button class="btn" id="exportBtn">Export</button>
           <button class="btn ghost icon" id="deleteBtn" title="Remove song" aria-label="Remove song">
             <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M7 3h6m-9 2h12m-10 0 .7 11h6.6L14 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
@@ -298,6 +304,37 @@
     <h3 id="notesTitle">What's new</h3>
     <div id="notesBody" class="release-notes"></div>
     <div class="row end"><button class="btn primary" value="ok">Close</button></div>
+  </form>
+</dialog>
+
+<dialog id="partsDialog">
+  <form method="dialog">
+    <h3>Parts</h3>
+    <p id="splitNote" class="note"></p>
+    <fieldset>
+      <legend>Splitter</legend>
+      <p class="muted small" id="splitUsed"></p>
+      <label class="check small"><input type="radio" name="splitQuality" value="best"><span>Best: cleaner, slower</span></label>
+      <label class="check small"><input type="radio" name="splitQuality" value="fast"><span>Fast</span></label>
+      <button class="btn small" type="button" id="resplitBtn">Split the song again</button>
+      <p class="muted small">Splitting again finds the notes and chords again. Your key and tempo changes are re-applied.</p>
+    </fieldset>
+    <fieldset>
+      <legend>Background removal</legend>
+      <p class="muted small">How strictly each part keeps out the other instruments and their echo. Stronger is cleaner but can sound a little thinner.</p>
+      <div class="seg" id="isoSeg">
+        <button type="button" data-iso="light">Light</button>
+        <button type="button" data-iso="medium">Medium</button>
+        <button type="button" data-iso="strong">Strong</button>
+      </div>
+    </fieldset>
+    <fieldset id="guitarSet">
+      <legend>Guitars</legend>
+      <p class="muted small" id="guitarText"></p>
+      <button class="btn small" type="button" id="guitarBtn"></button>
+    </fieldset>
+    <p id="partsBusy" class="muted small" hidden></p>
+    <div class="row end"><button class="btn primary" value="close">Done</button></div>
   </form>
 </dialog>
 

@@ -433,3 +433,10 @@ legend { font-weight: 600; margin-bottom: 4px; padding: 0; }
 
 .lane-name { min-width: 0; }
 .sub-bpm { margin-right: 10px; }
+
+fieldset.quality { margin: 14px 0 6px; }
+#partsDialog { width: 520px; }
+#partsDialog fieldset { border-top: 1px solid var(--line); padding-top: 12px; }
+#partsDialog fieldset .btn { margin-top: 6px; }
+#partsDialog .seg { margin-top: 4px; }
+#splitNote { color: var(--error); }
